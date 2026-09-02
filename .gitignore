@@ -1,0 +1,22 @@
+# Dependências (reinstaladas com npm install)
+node_modules/
+
+# Variáveis de ambiente e segredos
+.env
+.env.local
+
+# Banco de dados local
+*.db
+*.sqlite
+
+# Builds gerados
+client/dist/
+client/release/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sistema
+.DS_Store
+Thumbs.db
