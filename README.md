@@ -3,7 +3,7 @@
 Esqueleto inicial já testado: servidor Node.js + Socket.io e app
 Electron + React com o layout base (colunas de servidor/canal/conteúdo).
 
-## Como rodar
+## Como rodar .
 
 ### 1. Servidor
 ```
