@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-
-const SERVER_URL = 'https://relate-leon-extremely-moderators.trycloudflare.com';
+import { SERVER_URL } from '../api.js';
 
 export default function LoginScreen({ onAutenticado }) {
   const [modo, setModo] = useState('login'); // 'login' | 'cadastro'

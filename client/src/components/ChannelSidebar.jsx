@@ -47,7 +47,7 @@ export default function ChannelSidebar({
   onAbrirPerfil,
   onAbrirConfiguracao,
   canalDeVoz, // { id, nome } | null — canal de voz atualmente conectado
-  participantesVoz, // [{ socketId, nome }]
+  presencaVoz, // { canalId: [{ socketId, nome, avatarCor, avatarUrl }] } — de QUALQUER canal, mesmo sem estar nele
   vozEstado, // { micMudo, audioMudo, compartilhandoTela }
   vozAcoes, // { onAlternarMic, onAlternarAudio, onAlternarTela, onDesconectar }
   nomeUsuarioNaVoz,
@@ -102,31 +102,42 @@ export default function ChannelSidebar({
         ))}
 
         <div className="channel-group-label">Canais de voz</div>
-        {canaisVoz.map((c) => (
-          <React.Fragment key={c.id}>
-            <div
-              className={`channel-item${c.id === canalAtivoId ? ' active' : ''}`}
-              onClick={() => onSelecionar(c)}
-            >
-              <IconVoz />
-              {c.nome}
-            </div>
-            {canalDeVoz?.id === c.id && (
-              <div className="voz-participantes-lista">
-                <div className="voz-participante-item">
-                  <Avatar nome={nomeUsuarioNaVoz} avatarCor="#5865f2" tamanho="sm" />
-                  {nomeUsuarioNaVoz} {vozEstado.micMudo ? '🔇' : ''}
-                </div>
-                {participantesVoz.map((p) => (
-                  <div key={p.socketId} className="voz-participante-item">
-                    <Avatar nome={p.nome} avatarUrl={p.avatarUrl} avatarCor={p.avatarCor || '#5865f2'} tamanho="sm" />
-                    {p.nome}
-                  </div>
-                ))}
+        {canaisVoz.map((c) => {
+          const listaPresenca = presencaVoz?.[c.id] || [];
+          return (
+            <React.Fragment key={c.id}>
+              <div
+                className={`channel-item${c.id === canalAtivoId ? ' active' : ''}`}
+                onClick={() => onSelecionar(c)}
+              >
+                <IconVoz />
+                {c.nome}
+                {listaPresenca.length > 0 && (
+                  <span className="voz-contador-participantes">{listaPresenca.length}</span>
+                )}
               </div>
-            )}
-          </React.Fragment>
-        ))}
+              {listaPresenca.length > 0 && (
+                <div className="voz-participantes-lista">
+                  {listaPresenca.map((p) => {
+                    const souEu = canalDeVoz?.id === c.id && p.nome === nomeUsuarioNaVoz;
+                    return (
+                      <div key={p.socketId} className="voz-participante-item">
+                        <Avatar
+                          nome={p.nome}
+                          avatarUrl={souEu ? usuario.avatarUrl : p.avatarUrl}
+                          avatarCor={souEu ? usuario.avatarCor : p.avatarCor || '#5865f2'}
+                          tamanho="sm"
+                        />
+                        {p.nome}
+                        {souEu ? ' (você)' : ''} {souEu && vozEstado.micMudo ? '🔇' : ''}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </React.Fragment>
+          );
+        })}
       </div>
 
       {canalDeVoz && (

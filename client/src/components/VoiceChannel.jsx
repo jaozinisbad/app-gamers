@@ -4,6 +4,47 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 // a descobrirem como se alcançar através da internet (NAT traversal).
 const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
 
+// Bitrates-alvo pro compartilhamento de tela. Sem isso, o WebRTC usa um
+// teto bem conservador por padrão (pensado pra webcam, não pra tela/jogo
+// com texto fino), o que deixa a transmissão borrada/em blocos. Esses
+// valores são generosos pensando em hardware bom (RTX) do lado de quem
+// transmite — se a internet de upload de alguém for mais limitada, vale
+// reduzir esses números.
+const BITRATE_TELA = {
+  '720p': 3_500_000,
+  '1080p': 8_000_000,
+};
+
+// Bitrate de áudio mais alto que o padrão do Opus (que gira uns 32kbps)
+// — com um microfone bom, vale a pena usar mais banda pra manter a
+// clareza da voz.
+const BITRATE_AUDIO = 96_000;
+
+// O WebRTC não deixa escolher "use o NVENC" diretamente — quem decide
+// usar a placa de vídeo pra codificar é o próprio Chromium, por baixo
+// dos panos. O que dá pra fazer é aumentar bastante a chance disso
+// acontecer: o H264 é o codec que o Chromium consegue acelerar por
+// hardware (via NVENC em GPUs NVIDIA); o VP8, escolha padrão do WebRTC,
+// normalmente roda só por software. Então priorizamos H264 ao
+// compartilhar tela.
+function preferirH264(transceiver) {
+  if (!transceiver || typeof transceiver.setCodecPreferences !== 'function') return;
+  if (typeof RTCRtpSender === 'undefined' || !RTCRtpSender.getCapabilities) return;
+
+  const capacidades = RTCRtpSender.getCapabilities('video');
+  if (!capacidades) return;
+
+  const h264 = capacidades.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/h264');
+  const outros = capacidades.codecs.filter((c) => c.mimeType.toLowerCase() !== 'video/h264');
+  if (h264.length === 0) return;
+
+  try {
+    transceiver.setCodecPreferences([...h264, ...outros]);
+  } catch (err) {
+    // Se falhar por qualquer motivo, segue com o codec padrão — não é crítico.
+  }
+}
+
 // Esse componente não controla mais sua própria interface de
 // participantes/botões — isso agora vive na barra lateral (para ficar
 // igual ao Discord). Em vez disso, ele expõe funções via ref (mutar,
@@ -25,15 +66,24 @@ const VoiceChannel = forwardRef(function VoiceChannel(
   const [fpsTela, setFpsTela] = useState('30');
   const [telasRemotas, setTelasRemotas] = useState({}); // socketId -> MediaStream
 
-  const streamLocalRef = useRef(null);
+  // Pipeline de áudio local: microfone -> ganho (volume ajustável) ->
+  // stream final que de fato é enviada pros outros participantes. Antes
+  // o "volume de entrada" das Configurações não tinha efeito nenhum no
+  // que os outros ouviam (o nó de ganho só estava ligado à sua própria
+  // saída de áudio, não à chamada) — agora ele fica no meio do caminho
+  // de verdade.
+  const streamLocalRef = useRef(null); // captura bruta do getUserMedia
+  const streamEnviadaRef = useRef(null); // depois do GainNode — essa é a enviada
+  const contextoEntradaRef = useRef(null);
+  const ganhoEntradaRef = useRef(null);
+
   const telaLocalRef = useRef(null);
   const conexoesRef = useRef({}); // socketId -> RTCPeerConnection
   const audiosRef = useRef({}); // socketId -> HTMLAudioElement
   const audioMudoRef = useRef(false);
-  const contextoAudioRef = useRef(null);
+  const contextoAudioRef = useRef(null); // contexto só dos efeitos sonoros
   const telasComSomRef = useRef(new Set());
-  const gainNodeRef = useRef(null); // Nó de ganho para controlar volume
-  const configuracaoAudioRef = useRef(null);
+  const configuracaoAudioRef = useRef({ volumeEntrada: 100, volumeSaida: 100, microfoneId: '', foneId: '' });
 
   // Avisa o App sempre que algo que a sidebar precisa mostrar mudar.
   useEffect(() => {
@@ -49,8 +99,6 @@ const VoiceChannel = forwardRef(function VoiceChannel(
       } catch {
         configuracaoAudioRef.current = { volumeEntrada: 100, volumeSaida: 100, microfoneId: '', foneId: '' };
       }
-    } else {
-      configuracaoAudioRef.current = { volumeEntrada: 100, volumeSaida: 100, microfoneId: '', foneId: '' };
     }
   }, []);
 
@@ -89,6 +137,66 @@ const VoiceChannel = forwardRef(function VoiceChannel(
     }
   }
 
+  // Monta o pipeline microfone -> ganho -> stream de saída. Usado tanto
+  // ao entrar na call quanto ao trocar de microfone no meio dela.
+  //
+  // CORREÇÃO: agora pedimos explicitamente cancelamento de eco, supressão
+  // de ruído e controle automático de ganho (antes ficava só no padrão
+  // "cru" do sistema, o que deixava ruído externo vazar mais), e também
+  // respeitamos o microfone escolhido nas Configurações — antes o app
+  // sempre usava o microfone padrão do Windows, ignorando a escolha.
+  async function montarPipelineDeEntrada(deviceId) {
+    const constraints = {
+      audio: {
+        ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        sampleRate: 48000,
+      },
+    };
+    const streamBruta = await navigator.mediaDevices.getUserMedia(constraints);
+
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    const contexto = new AudioContext();
+    const origem = contexto.createMediaStreamSource(streamBruta);
+    const ganho = contexto.createGain();
+    ganho.gain.value = (configuracaoAudioRef.current.volumeEntrada ?? 100) / 100;
+    const destino = contexto.createMediaStreamDestination();
+    origem.connect(ganho).connect(destino);
+
+    streamLocalRef.current = streamBruta;
+    streamEnviadaRef.current = destino.stream;
+    contextoEntradaRef.current = contexto;
+    ganhoEntradaRef.current = ganho;
+
+    streamBruta.getAudioTracks().forEach((t) => (t.enabled = !micMudo));
+
+    return destino.stream.getAudioTracks()[0];
+  }
+
+  function aplicarVolumeESaidaNosAudios() {
+    const volume = (configuracaoAudioRef.current.volumeSaida ?? 100) / 100;
+    const foneId = configuracaoAudioRef.current.foneId;
+    Object.values(audiosRef.current).forEach((audio) => {
+      audio.volume = volume;
+      if (foneId && audio.setSinkId) {
+        audio.setSinkId(foneId).catch(() => {});
+      }
+    });
+  }
+
+  // Aplica um bitrate mais alto no áudio enviado pra essa conexão.
+  function configurarQualidadeDeAudio(pc) {
+    const remetente = pc.getSenders().find((s) => s.track?.kind === 'audio');
+    if (!remetente) return;
+    const parametros = remetente.getParameters();
+    parametros.encodings = (parametros.encodings && parametros.encodings.length ? parametros.encodings : [{}]).map(
+      (encoding) => ({ ...encoding, maxBitrate: BITRATE_AUDIO }),
+    );
+    remetente.setParameters(parametros).catch(() => {});
+  }
+
   useEffect(() => {
     if (!socket) return;
     let cancelado = false;
@@ -103,9 +211,11 @@ const VoiceChannel = forwardRef(function VoiceChannel(
       const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
       conexoesRef.current[socketId] = pc;
 
-      streamLocalRef.current?.getTracks().forEach((track) => {
-        pc.addTrack(track, streamLocalRef.current);
+      streamEnviadaRef.current?.getTracks().forEach((track) => {
+        pc.addTrack(track, streamEnviadaRef.current);
       });
+      configurarQualidadeDeAudio(pc);
+
       telaLocalRef.current?.getTracks().forEach((track) => {
         pc.addTrack(track, telaLocalRef.current);
       });
@@ -123,6 +233,10 @@ const VoiceChannel = forwardRef(function VoiceChannel(
             audio = new Audio();
             audio.autoplay = true;
             audio.muted = audioMudoRef.current;
+            audio.volume = (configuracaoAudioRef.current.volumeSaida ?? 100) / 100;
+            if (configuracaoAudioRef.current.foneId && audio.setSinkId) {
+              audio.setSinkId(configuracaoAudioRef.current.foneId).catch(() => {});
+            }
             audiosRef.current[socketId] = audio;
           }
           audio.srcObject = e.streams[0];
@@ -172,12 +286,8 @@ const VoiceChannel = forwardRef(function VoiceChannel(
 
     async function iniciar() {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        if (cancelado) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        streamLocalRef.current = stream;
+        await montarPipelineDeEntrada(configuracaoAudioRef.current.microfoneId);
+        if (cancelado) return;
         setConectando(false);
         socket.emit('entrar-canal-voz', canal.id);
       } catch (err) {
@@ -187,7 +297,10 @@ const VoiceChannel = forwardRef(function VoiceChannel(
     }
 
     socket.on('peers-existentes', ({ peers }) => {
-      setParticipantes(peers);
+      setParticipantes([
+        ...peers,
+        { socketId: socket.id, nome: nomeUsuario },
+      ]);
       peers.forEach((p) => {
         const pc = criarConexao(p.socketId);
         renegociar(pc, p.socketId);
@@ -200,11 +313,24 @@ const VoiceChannel = forwardRef(function VoiceChannel(
     });
 
     socket.on('webrtc-oferta', async ({ de, oferta }) => {
+      const conexaoNova = !conexoesRef.current[de];
       const pc = conexoesRef.current[de] || criarConexao(de);
       await pc.setRemoteDescription(oferta);
       const resposta = await pc.createAnswer();
       await pc.setLocalDescription(resposta);
       socket.emit('webrtc-resposta', { para: de, resposta });
+
+      // Se é uma conexão nova (alguém acabou de entrar na call) e eu já
+      // estou compartilhando tela: a track de vídeo foi adicionada na
+      // criarConexao(), mas não pôde entrar nessa resposta, porque a
+      // resposta só "fala" sobre o que a oferta recebida pediu (só
+      // áudio, no caso de quem chega). Por isso mandamos uma segunda
+      // oferta logo em seguida, dessa vez incluindo o vídeo — sem isso,
+      // quem entra depois só veria a tela se a pessoa reiniciasse o
+      // compartilhamento.
+      if (conexaoNova && telaLocalRef.current) {
+        await renegociar(pc, de);
+      }
     });
 
     socket.on('webrtc-resposta', async ({ de, resposta }) => {
@@ -250,6 +376,9 @@ const VoiceChannel = forwardRef(function VoiceChannel(
       Object.keys(conexoesRef.current).forEach(fecharConexao);
       streamLocalRef.current?.getTracks().forEach((t) => t.stop());
       streamLocalRef.current = null;
+      streamEnviadaRef.current = null;
+      contextoEntradaRef.current?.close().catch(() => {});
+      contextoEntradaRef.current = null;
       telaLocalRef.current?.getTracks().forEach((t) => t.stop());
       telaLocalRef.current = null;
       setParticipantes([]);
@@ -287,6 +416,10 @@ const VoiceChannel = forwardRef(function VoiceChannel(
     }
   }
 
+  // CORREÇÃO DO BUG "sempre compartilha o monitor 1": antes de chamar
+  // getDisplayMedia(), avisamos o processo principal do Electron qual
+  // fonte foi escolhida no seletor — sem isso, o Electron sempre decidia
+  // sozinho (e sempre escolhia a primeira tela da lista).
   async function iniciarCompartilhamento(config) {
     try {
       setErroCompartilhamento('');
@@ -296,8 +429,10 @@ const VoiceChannel = forwardRef(function VoiceChannel(
         ? { largura: 1920, altura: 1080 }
         : { largura: 1280, altura: 720 };
 
-      // Usa getDisplayMedia padrão do navegador
-      // No Electron, isso vai listar as telas graças ao desktopCapturer exposto no preload
+      if (config?.fonteId && window.electronAPI?.definirFonteCompartilhamento) {
+        window.electronAPI.definirFonteCompartilhamento(config.fonteId);
+      }
+
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           width: { ideal: dimensoes.largura, max: dimensoes.largura },
@@ -307,20 +442,32 @@ const VoiceChannel = forwardRef(function VoiceChannel(
       });
 
       const videoTrack = stream.getVideoTracks()[0];
-      videoTrack.contentHint = 'motion';
+      // "detail" preserva nitidez de texto/interface melhor que "motion"
+      // pra compartilhamento de tela cheia.
+      videoTrack.contentHint = 'detail';
       videoTrack.onended = () => pararCompartilhamento();
 
       telaLocalRef.current = stream;
       setCompartilhandoTela(true);
       tocarEfeito('transmitir');
 
+      const alturaNativa = videoTrack.getSettings().height || dimensoes.altura;
+      const alturaAlvo = res === '1080p' ? 1080 : 720;
+      const escala = alturaNativa > alturaAlvo ? alturaNativa / alturaAlvo : 1;
+
       Object.values(conexoesRef.current).forEach((pc) => {
         const remetente = pc.addTrack(videoTrack, stream);
+        const transceiver = pc.getTransceivers().find((t) => t.sender === remetente);
+        preferirH264(transceiver);
+
         const parametros = remetente.getParameters();
-        parametros.encodings = (parametros.encodings || [{}]).map((encoding) => ({
-          ...encoding,
-          maxFramerate: fps,
-        }));
+        parametros.encodings = [
+          {
+            maxBitrate: BITRATE_TELA[res] || BITRATE_TELA['720p'],
+            maxFramerate: fps,
+            scaleResolutionDownBy: escala,
+          },
+        ];
         remetente.setParameters(parametros).catch(() => {});
       });
       await renegociarComTodos();
@@ -362,47 +509,40 @@ const VoiceChannel = forwardRef(function VoiceChannel(
     }
   }
 
+  // CORREÇÃO: antes, o volume de entrada era aplicado num GainNode que só
+  // estava ligado à SUA PRÓPRIA saída de áudio — não tinha efeito nenhum
+  // no que os outros ouviam. Agora ele ajusta o ganho real do pipeline
+  // que alimenta a chamada. A troca de microfone também agora troca de
+  // verdade (antes dependia de um IPC sem handler no processo principal,
+  // que sempre falhava em silêncio).
   async function aplicarConfiguracao(config) {
     if (!config) return;
-    
-    // Atualizar volume de entrada
-    if (config.volumeEntrada !== undefined) {
+
+    const microfoneMudou = config.microfoneId !== configuracaoAudioRef.current.microfoneId;
+    configuracaoAudioRef.current = { ...configuracaoAudioRef.current, ...config };
+
+    if (config.volumeEntrada !== undefined && ganhoEntradaRef.current && contextoEntradaRef.current) {
       const volume = Math.max(0, Math.min(200, config.volumeEntrada)) / 100;
-      
-      // Se não tiver gainNode, cria um
-      if (!gainNodeRef.current) {
-        const ctx = contextoAudioRef.current || new (window.AudioContext || window.webkitAudioContext)();
-        contextoAudioRef.current = ctx;
-        gainNodeRef.current = ctx.createGain();
-        gainNodeRef.current.connect(ctx.destination);
-      }
-      
-      gainNodeRef.current.gain.setValueAtTime(volume, contextoAudioRef.current.currentTime);
+      ganhoEntradaRef.current.gain.setValueAtTime(volume, contextoEntradaRef.current.currentTime);
     }
 
-    // Atualizar volume de saída
-    if (config.volumeSaida !== undefined) {
-      const volume = Math.max(0, Math.min(200, config.volumeSaida)) / 100;
-      Object.values(audiosRef.current).forEach((audio) => {
-        audio.volume = volume;
-      });
+    if (config.volumeSaida !== undefined || config.foneId !== undefined) {
+      aplicarVolumeESaidaNosAudios();
     }
 
-    // Atualizar microfone (se tiver suporte)
-    if (config.microfoneId && window.electronAPI?.changeAudioDevice) {
+    if (microfoneMudou && streamLocalRef.current) {
       try {
-        await window.electronAPI.changeAudioDevice('audioinput', config.microfoneId);
-      } catch (e) {
-        // Troca de dispositivo não suportada
-      }
-    }
+        streamLocalRef.current.getTracks().forEach((t) => t.stop());
+        contextoEntradaRef.current?.close().catch(() => {});
+        const novaTrackEnviada = await montarPipelineDeEntrada(config.microfoneId);
 
-    // Atualizar fone (se tiver suporte)
-    if (config.foneId && window.electronAPI?.changeAudioDevice) {
-      try {
-        await window.electronAPI.changeAudioDevice('audiooutput', config.foneId);
-      } catch (e) {
-        // Troca de dispositivo não suportada
+        Object.values(conexoesRef.current).forEach((pc) => {
+          const remetente = pc.getSenders().find((s) => s.track?.kind === 'audio');
+          remetente?.replaceTrack(novaTrackEnviada);
+          configurarQualidadeDeAudio(pc);
+        });
+      } catch (err) {
+        setErro('Não foi possível trocar de microfone.');
       }
     }
   }

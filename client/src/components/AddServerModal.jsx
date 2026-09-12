@@ -10,6 +10,10 @@ export default function AddServerModal({ onFechar, onCriar, onEntrar }) {
   async function confirmar(e) {
     e.preventDefault();
     setErro('');
+    if (modo === 'criar' && !nome.trim()) {
+      setErro('Digite um nome para o servidor.');
+      return;
+    }
     setCarregando(true);
     try {
       if (modo === 'criar') {
@@ -49,6 +53,8 @@ export default function AddServerModal({ onFechar, onCriar, onEntrar }) {
             placeholder="Nome do servidor"
             value={nome}
             onChange={(e) => setNome(e.target.value)}
+            maxLength={50}
+            required
             className="modal-input"
           />
         ) : (

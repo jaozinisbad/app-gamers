@@ -8,7 +8,8 @@
     "build": "vite build",
     "dev:electron": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "electron": "electron .",
-    "dist": "vite build && electron-builder"
+    "dist": "vite build && electron-builder",
+    "dist:mac": "vite build && electron-builder --mac dmg"
   },
   "build": {
     "appId": "com.appgamers.client",
@@ -22,11 +23,16 @@
       "package.json"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.social-networking"
     }
   },
   "devDependencies": {

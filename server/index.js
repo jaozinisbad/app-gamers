@@ -64,6 +64,39 @@ function avisarAmigos(usuarioId, evento) {
   });
 }
 
+function membrosDoServidor(servidorId) {
+  return db
+    .prepare('SELECT usuario_id FROM membros_servidor WHERE servidor_id = ?')
+    .all(servidorId)
+    .map((linha) => linha.usuario_id);
+}
+
+function listaParticipantesDoCanal(canalId) {
+  const mapa = canalVozParticipantes[canalId];
+  if (!mapa) return [];
+  return Array.from(mapa.entries()).map(([socketId, dadosUsuario]) => ({
+    socketId,
+    nome: dadosUsuario.nome,
+    avatarCor: dadosUsuario.avatarCor,
+    avatarUrl: dadosUsuario.avatarUrl,
+  }));
+}
+
+// Avisa TODO MUNDO do servidor (não só quem já está na call) quem está
+// em cada canal de voz agora — é o que alimenta a pré-visualização de
+// participantes na lista de canais, mesmo pra quem ainda não entrou.
+function avisarPresencaVoz(canalId) {
+  const canal = servidorDoCanal(canalId);
+  if (!canal) return;
+
+  const participantes = listaParticipantesDoCanal(canalId);
+  membrosDoServidor(canal.servidor_id).forEach((usuarioId) => {
+    socketsPorUsuario.get(usuarioId)?.forEach((socketId) => {
+      io.to(socketId).emit('presenca-voz-canal', { canalId, participantes });
+    });
+  });
+}
+
 function sairDoCanalVoz(socket) {
   const canalId = socket.canalVozAtual;
   if (!canalId) return;
@@ -72,6 +105,7 @@ function sairDoCanalVoz(socket) {
   canalVozParticipantes[canalId]?.delete(socket.id);
   io.to(`voz-${canalId}`).emit('peer-saiu', { socketId: socket.id });
   socket.canalVozAtual = null;
+  avisarPresencaVoz(canalId);
 }
 
 // Exige um token válido para abrir a conexão de tempo real (chat/voz).
@@ -169,6 +203,25 @@ io.on('connection', (socket) => {
       avatarCor: usuario.avatar_cor || '#5865f2',
       avatarUrl: usuario.avatar_url || null,
     });
+    avisarPresencaVoz(canalId);
+  });
+
+  // Um cliente pede o retrato atual de quem está em cada canal de voz de
+  // um servidor — usado quando abre a lista de canais, mesmo sem ter
+  // entrado em nenhuma call ainda (pré-visualização).
+  socket.on('obter-presenca-servidor', (servidorId) => {
+    if (!ehMembro(servidorId, socket.usuario.id)) return;
+
+    const canaisDeVoz = db
+      .prepare("SELECT id FROM canais WHERE servidor_id = ? AND tipo = 'voz'")
+      .all(servidorId);
+
+    const participantesPorCanal = {};
+    canaisDeVoz.forEach(({ id }) => {
+      participantesPorCanal[id] = listaParticipantesDoCanal(id);
+    });
+
+    socket.emit('presenca-voz-servidor', { participantesPorCanal });
   });
 
   socket.on('sair-canal-voz', () => sairDoCanalVoz(socket));

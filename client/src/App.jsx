@@ -49,7 +49,12 @@ export default function App() {
   // Conecta o socket assim que há sessão.
   useEffect(() => {
     if (!sessao) return;
-    const s = io(SERVER_URL, { auth: { token: sessao.token } });
+    const s = io(SERVER_URL, {
+      auth: { token: sessao.token },
+      // Faz o ngrok (plano grátis) pular a página de aviso de navegador.
+      // Inofensivo em outros túneis/hosts, que simplesmente ignoram o header.
+      extraHeaders: { 'ngrok-skip-browser-warning': 'true' },
+    });
     s.on('connect', () => setStatus('conectado ao servidor'));
     s.on('disconnect', () => setStatus('desconectado'));
     setSocket(s);
@@ -246,7 +251,7 @@ export default function App() {
             onAbrirPerfil={() => setPerfilAberto(true)}
             onAbrirConfiguracao={() => setSettingsAberto(true)}
             canalDeVoz={canalDeVoz}
-            participantesVoz={vozEstado.participantes}
+            presencaVoz={{ [canalDeVoz?.id || 'atual']: vozEstado.participantes }}
             vozEstado={vozEstado}
             vozAcoes={vozAcoes}
             nomeUsuarioNaVoz={sessao.usuario.nome}

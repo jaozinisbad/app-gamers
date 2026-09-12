@@ -1,13 +1,28 @@
 const { app, BrowserWindow, desktopCapturer, session, ipcMain } = require('electron');
 const path = require('path');
 
+// Guarda qual fonte (tela/janela) o usuário escolheu no seletor próprio
+// do app, pra usar na hora que o Electron de fato pedir a captura.
+let fonteEscolhidaId = null;
+
 function configurarCompartilhamentoDeTela() {
+  // Recebe do renderer qual fonte foi escolhida no ScreenShareSourcePicker,
+  // ANTES de getDisplayMedia() ser chamado.
+  ipcMain.on('definir-fonte-compartilhamento', (_event, fonteId) => {
+    fonteEscolhidaId = fonteId;
+  });
+
+  // IMPORTANTE: useSystemPicker precisa ficar desligado — se estiver
+  // ligado, o próprio Windows/macOS mostra o seletor nativo dele e essa
+  // função nem chega a rodar, ignorando a fonte escolhida no app.
   session.defaultSession.setDisplayMediaRequestHandler(
     async (_request, callback) => {
       const fontes = await desktopCapturer.getSources({ types: ['screen', 'window'] });
-      callback({ video: fontes[0] });
+      const escolhida = fonteEscolhidaId ? fontes.find((f) => f.id === fonteEscolhidaId) : null;
+      callback({ video: escolhida || fontes[0] });
+      fonteEscolhidaId = null; // reseta pra próxima vez, evita "grudar" na mesma fonte
     },
-    { useSystemPicker: true },
+    { useSystemPicker: false },
   );
 
   // desktopCapturer só pode ser usado no processo main (Electron 17+).

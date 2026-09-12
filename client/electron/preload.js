@@ -12,6 +12,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
 
+  // Avisa o processo principal qual fonte foi escolhida no seletor,
+  // ANTES de chamar getDisplayMedia() — sem isso, o Electron não sabe
+  // qual tela/janela específica você quis compartilhar.
+  definirFonteCompartilhamento: (fonteId) => {
+    ipcRenderer.send('definir-fonte-compartilhamento', fonteId);
+  },
+
   // Trocar dispositivo de áudio
   changeAudioDevice: async (kind, deviceId) => {
     try {
