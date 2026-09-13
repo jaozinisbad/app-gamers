@@ -1,4 +1,5 @@
 const { app, BrowserWindow, desktopCapturer, session, ipcMain } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const { exec } = require('child_process');
 
@@ -148,12 +149,32 @@ function createWindow() {
     // Modo empacotado (após "npm run build")
     win.loadFile(path.join(__dirname, '../dist/index.html'));
   }
+
+  return win;
+}
+
+// Verifica se há uma versão nova publicada, baixa em segundo plano e,
+// quando terminar, avisa a interface pra mostrar o botão de reiniciar.
+// Só roda em build empacotado (não em npm run dev:electron).
+function configurarAtualizacaoAutomatica(win) {
+  if (!app.isPackaged) return;
+
+  autoUpdater.checkForUpdatesAndNotify();
+
+  autoUpdater.on('update-downloaded', () => {
+    win.webContents.send('atualizacao-pronta');
+  });
+
+  ipcMain.handle('reiniciar-para-atualizar', () => {
+    autoUpdater.quitAndInstall();
+  });
 }
 
 app.whenReady().then(() => {
   configurarCompartilhamentoDeTela();
   configurarCapturaPorProcesso();
-  createWindow();
+  const win = createWindow();
+  configurarAtualizacaoAutomatica(win);
 });
 
 app.on('window-all-closed', () => {

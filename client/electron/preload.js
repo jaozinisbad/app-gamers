@@ -42,4 +42,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('audio-tela-chunk', ouvinte);
     return () => ipcRenderer.removeListener('audio-tela-chunk', ouvinte);
   },
+
+  // Atualização automática: avisa quando uma nova versão já foi baixada
+  // e está pronta, e permite pedir pro app reiniciar já atualizado.
+  onAtualizacaoPronta: (callback) => {
+    ipcRenderer.on('atualizacao-pronta', callback);
+  },
+  reiniciarParaAtualizar: () => ipcRenderer.invoke('reiniciar-para-atualizar'),
 });

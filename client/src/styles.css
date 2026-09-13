@@ -27,6 +27,46 @@ html, body, #root {
   background: radial-gradient(circle at top right, #263451 0, #171c27 36%, #11151d 100%);
 }
 
+.atualizacao-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: #248046;
+  color: #fff;
+  font-size: 13px;
+}
+
+.atualizacao-banner button {
+  background: #fff;
+  color: #248046;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.versao-watermark {
+  position: fixed;
+  right: 10px;
+  bottom: 8px;
+  z-index: 1100;
+  padding: 3px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  background: rgba(15, 19, 27, 0.78);
+  color: rgba(233, 237, 245, 0.62);
+  font-size: 11px;
+  pointer-events: none;
+}
+
 /* Coluna 1: barra de servidores */
 .server-sidebar {
   width: 72px;

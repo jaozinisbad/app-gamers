@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
+import packageJson from '../package.json';
 import ServerSidebar from './components/ServerSidebar.jsx';
 import ChannelSidebar from './components/ChannelSidebar.jsx';
 import ChatArea from './components/ChatArea.jsx';
@@ -40,6 +41,7 @@ export default function App() {
   const [perfilAberto, setPerfilAberto] = useState(false);
   const [settingsAberto, setSettingsAberto] = useState(false);
   const [pickerTelaAberto, setPickerTelaAberto] = useState(false);
+  const [atualizacaoPronta, setAtualizacaoPronta] = useState(false);
 
   // view: 'servidor' | 'amigos' | 'dm'
   const [view, setView] = useState('servidor');
@@ -50,6 +52,13 @@ export default function App() {
   // canalId -> [{socketId, nome, avatarCor, avatarUrl}]. Isso alimenta a
   // pré-visualização de participantes mesmo sem você estar na call.
   const [presencaVoz, setPresencaVoz] = useState({});
+
+  // Escuta o aviso do processo main quando uma atualização já foi
+  // baixada e está pronta pra instalar (só existe rodando empacotado).
+  useEffect(() => {
+    if (!window.electronAPI?.onAtualizacaoPronta) return;
+    window.electronAPI.onAtualizacaoPronta(() => setAtualizacaoPronta(true));
+  }, []);
 
   // Conecta o socket assim que há sessão.
   useEffect(() => {
@@ -238,7 +247,12 @@ export default function App() {
   }
 
   if (!sessao) {
-    return <LoginScreen onAutenticado={autenticar} />;
+    return (
+      <>
+        <LoginScreen onAutenticado={autenticar} />
+        <div className="versao-watermark">v{packageJson.version}</div>
+      </>
+    );
   }
 
   const servidorAtivo = servidores.find((s) => s.id === servidorAtivoId);
@@ -251,7 +265,16 @@ export default function App() {
   };
 
   return (
-    <div className="app">
+    <>
+      <div className="app">
+      {atualizacaoPronta && (
+        <div className="atualizacao-banner">
+          <span>Uma atualização foi baixada.</span>
+          <button type="button" onClick={() => window.electronAPI.reiniciarParaAtualizar()}>
+            Reiniciar agora
+          </button>
+        </div>
+      )}
       <ServerSidebar
         servidores={servidores}
         servidorAtivoId={servidorAtivoId}
@@ -350,6 +373,8 @@ export default function App() {
           onSelecionar={handleCompartilharTela}
         />
       )}
-    </div>
+      </div>
+      <div className="versao-watermark">v{packageJson.version}</div>
+    </>
   );
 }

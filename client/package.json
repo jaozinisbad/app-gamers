@@ -1,6 +1,6 @@
 {
   "name": "app-gamers-client",
-  "version": "1.0.5",
+  "version": "1.0.8",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
@@ -9,7 +9,8 @@
     "dev:electron": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "electron": "electron .",
     "dist": "vite build && electron-builder",
-    "dist:mac": "vite build && electron-builder --mac dmg"
+    "dist:mac": "vite build && electron-builder --mac dmg",
+    "release": "vite build && electron-builder --publish always"
   },
   "build": {
     "appId": "com.appgamers.client",
@@ -22,6 +23,12 @@
       "electron/**/*",
       "package.json"
     ],
+    "publish": {
+      "provider": "github",
+      "owner": "jaozinisbad",
+      "repo": "app-gamers",
+      "releaseType": "release"
+    },
     "win": {
       "target": "nsis",
       "signAndEditExecutable": false
@@ -44,6 +51,7 @@
     "wait-on": "^7.2.0"
   },
   "dependencies": {
+    "electron-updater": "^6.3.0",
     "loopback-capture": "^3.0.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
