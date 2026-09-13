@@ -29,4 +29,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
       throw err;
     }
   },
+
+  // Captura de áudio de UM app específico (ex: só o jogo), em vez do
+  // sistema inteiro. Só funciona no Windows 10+.
+  iniciarCapturaProcesso: (tituloJanela) => ipcRenderer.invoke('iniciar-captura-processo', tituloJanela),
+  pararCapturaProcesso: () => ipcRenderer.invoke('parar-captura-processo'),
+
+  // Escuta os pedaços de áudio (PCM) chegando do processo escolhido.
+  // Retorna uma função para parar de escutar.
+  onAudioTelaChunk: (callback) => {
+    const ouvinte = (_event, chunk) => callback(chunk);
+    ipcRenderer.on('audio-tela-chunk', ouvinte);
+    return () => ipcRenderer.removeListener('audio-tela-chunk', ouvinte);
+  },
 });

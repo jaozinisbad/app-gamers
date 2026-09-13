@@ -27,7 +27,14 @@ function dadosPublicos(usuario) {
 router.post('/cadastro', async (req, res) => {
   const { nome, email, senha } = req.body;
 
-  if (!nome || !email || !senha) {
+  if (
+    typeof nome !== 'string' ||
+    typeof email !== 'string' ||
+    typeof senha !== 'string' ||
+    !nome.trim() ||
+    !email.trim() ||
+    !senha
+  ) {
     return res.status(400).json({ erro: 'Preencha nome, email e senha.' });
   }
   if (senha.length < 6) {
@@ -53,7 +60,7 @@ router.post('/cadastro', async (req, res) => {
 router.post('/login', async (req, res) => {
   const { email, senha } = req.body;
 
-  if (!email || !senha) {
+  if (typeof email !== 'string' || typeof senha !== 'string' || !email.trim() || !senha) {
     return res.status(400).json({ erro: 'Preencha email e senha.' });
   }
 

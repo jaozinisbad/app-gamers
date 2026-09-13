@@ -46,6 +46,11 @@ export default function App() {
   const [amigos, setAmigos] = useState([]);
   const [dmAtiva, setDmAtiva] = useState(null); // amigo com quem está conversando
 
+  // Quem está em cada canal de voz, de TODOS os servidores já vistos —
+  // canalId -> [{socketId, nome, avatarCor, avatarUrl}]. Isso alimenta a
+  // pré-visualização de participantes mesmo sem você estar na call.
+  const [presencaVoz, setPresencaVoz] = useState({});
+
   // Conecta o socket assim que há sessão.
   useEffect(() => {
     if (!sessao) return;
@@ -92,11 +97,31 @@ export default function App() {
     }
     socket.on('amigo-online', online);
     socket.on('amigo-offline', offline);
+
+    function aoAtualizarPresencaVoz({ canalId, participantes }) {
+      setPresencaVoz((atual) => ({ ...atual, [canalId]: participantes }));
+    }
+    socket.on('presenca-voz-canal', aoAtualizarPresencaVoz);
+
     return () => {
       socket.off('amigo-online', online);
       socket.off('amigo-offline', offline);
+      socket.off('presenca-voz-canal', aoAtualizarPresencaVoz);
     };
   }, [socket]);
+
+  // Pede o retrato inicial de quem está em cada canal de voz do servidor
+  // ativo, assim que o socket e o servidor estiverem prontos — as
+  // atualizações seguintes chegam em tempo real pelo listener acima.
+  useEffect(() => {
+    if (!socket || !servidorAtivoId) return;
+    function aoReceberRetrato({ participantesPorCanal }) {
+      setPresencaVoz((atual) => ({ ...atual, ...participantesPorCanal }));
+    }
+    socket.once('presenca-voz-servidor', aoReceberRetrato);
+    socket.emit('obter-presenca-servidor', servidorAtivoId);
+    return () => socket.off('presenca-voz-servidor', aoReceberRetrato);
+  }, [socket, servidorAtivoId]);
 
   // Carrega os canais sempre que o servidor ativo muda.
   useEffect(() => {
@@ -251,7 +276,7 @@ export default function App() {
             onAbrirPerfil={() => setPerfilAberto(true)}
             onAbrirConfiguracao={() => setSettingsAberto(true)}
             canalDeVoz={canalDeVoz}
-            presencaVoz={{ [canalDeVoz?.id || 'atual']: vozEstado.participantes }}
+            presencaVoz={presencaVoz}
             vozEstado={vozEstado}
             vozAcoes={vozAcoes}
             nomeUsuarioNaVoz={sessao.usuario.nome}

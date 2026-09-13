@@ -831,6 +831,20 @@ html, body, #root {
   margin: 0;
 }
 
+.screen-picker-audio-app {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #b5c2d9;
+  background: #0f131b;
+  border: 1px solid #2a3344;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-top: 8px;
+  cursor: pointer;
+}
+
 .screen-picker-options {
   display: flex;
   gap: 12px;

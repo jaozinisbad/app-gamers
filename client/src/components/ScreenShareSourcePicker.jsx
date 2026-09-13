@@ -6,10 +6,11 @@ import React, { useEffect, useState } from 'react';
  * - Escolhe resolução (720p/1080p) e FPS (30/60)
  */
 export default function ScreenShareSourcePicker({ onSelecionar, onFechar }) {
-  const [fontes, setFontes] = useState([]); // [{id, name, thumbnail}]
+  const [fontes, setFontes] = useState([]); // [{id, name, thumbnail, tipo}]
   const [resolucao, setResolucao] = useState('720p');
   const [fps, setFps] = useState('30');
   const [selecionada, setSelecionada] = useState(null);
+  const [capturarAudioApp, setCapturarAudioApp] = useState(false);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
 
@@ -41,6 +42,10 @@ export default function ScreenShareSourcePicker({ onSelecionar, onFechar }) {
         fonteId: fonte.id,
         resolucao,
         fps: parseInt(fps),
+        // Só faz sentido pedir áudio isolado de um app quando a fonte
+        // escolhida É um app (janela), não uma tela inteira.
+        capturarAudioApp: fonte.tipo === 'janela' && capturarAudioApp,
+        tituloJanela: fonte.name,
       });
     }
   }
@@ -70,6 +75,18 @@ export default function ScreenShareSourcePicker({ onSelecionar, onFechar }) {
                 </div>
               ))}
             </div>
+
+            {fontes.find((f) => f.id === selecionada)?.tipo === 'janela' && (
+              <label className="screen-picker-audio-app">
+                <input
+                  type="checkbox"
+                  checked={capturarAudioApp}
+                  onChange={(e) => setCapturarAudioApp(e.target.checked)}
+                />
+                🎯 Capturar só o áudio desse app (experimental, Windows) — em vez do som do
+                sistema inteiro
+              </label>
+            )}
 
             <div className="screen-picker-options">
               <label>

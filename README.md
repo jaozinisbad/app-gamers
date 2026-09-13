@@ -74,6 +74,17 @@ mexer no roteador:
 > aparecer um aviso "ExperimentalWarning: SQLite is an experimental feature"
 > no terminal ao iniciar o servidor, é esperado e não afeta o funcionamento.
 
+## Atualizações automáticas
+
+O app verifica novas versões publicadas em GitHub Releases ao iniciar. A nova
+versão é baixada em segundo plano e instalada automaticamente quando o app
+for fechado e aberto novamente.
+
+Para lançar uma atualização, aumente a versão em `client/package.json`, execute
+`npm run dist` dentro de `client` e publique os arquivos gerados no GitHub
+Release correspondente. A versão do release precisa ser igual à versão do
+`package.json`, por exemplo `v1.0.5`.
+
 ## Fase 3 — servidores, convites e chat em tempo real
 
 Fluxo para testar com um amigo:

@@ -285,6 +285,14 @@ io.on('connection', (socket) => {
   });
 });
 
+// JSON inválido deve virar erro 400, nunca encerrar o processo do servidor.
+app.use((erro, _req, res, next) => {
+  if (erro instanceof SyntaxError && erro.status === 400 && erro.type === 'entity.parse.failed') {
+    return res.status(400).json({ erro: 'JSON inválido.' });
+  }
+  return next(erro);
+});
+
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`Servidor rodando em http://localhost:${PORT}`);

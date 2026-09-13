@@ -20,6 +20,10 @@ const BITRATE_TELA = {
 // clareza da voz.
 const BITRATE_AUDIO = 96_000;
 
+// O áudio do sistema (jogo, música, etc.) se beneficia de mais banda
+// ainda que a voz, já que costuma ter mais variação de frequência.
+const BITRATE_AUDIO_TELA = 128_000;
+
 // O WebRTC não deixa escolher "use o NVENC" diretamente — quem decide
 // usar a placa de vídeo pra codificar é o próprio Chromium, por baixo
 // dos panos. O que dá pra fazer é aumentar bastante a chance disso
@@ -78,8 +82,11 @@ const VoiceChannel = forwardRef(function VoiceChannel(
   const ganhoEntradaRef = useRef(null);
 
   const telaLocalRef = useRef(null);
+  const pipelineAudioProcessoRef = useRef(null); // { stream, receberChunk, destruir } quando usando audio por app
+  const pararOuvinteAudioTelaRef = useRef(null); // funcao pra parar de escutar os chunks vindos do Electron
   const conexoesRef = useRef({}); // socketId -> RTCPeerConnection
-  const audiosRef = useRef({}); // socketId -> HTMLAudioElement
+  const audiosRef = useRef({}); // socketId -> HTMLAudioElement (microfone)
+  const audiosTelaRef = useRef({}); // socketId -> HTMLAudioElement (áudio do sistema de quem compartilha tela)
   const audioMudoRef = useRef(false);
   const contextoAudioRef = useRef(null); // contexto só dos efeitos sonoros
   const telasComSomRef = useRef(new Set());
@@ -184,6 +191,12 @@ const VoiceChannel = forwardRef(function VoiceChannel(
         audio.setSinkId(foneId).catch(() => {});
       }
     });
+    Object.values(audiosTelaRef.current).forEach((audio) => {
+      audio.volume = volume;
+      if (foneId && audio.setSinkId) {
+        audio.setSinkId(foneId).catch(() => {});
+      }
+    });
   }
 
   // Aplica um bitrate mais alto no áudio enviado pra essa conexão.
@@ -195,6 +208,59 @@ const VoiceChannel = forwardRef(function VoiceChannel(
       (encoding) => ({ ...encoding, maxBitrate: BITRATE_AUDIO }),
     );
     remetente.setParameters(parametros).catch(() => {});
+  }
+
+  // Converte os pedaços de áudio cru (PCM 16-bit, estéreo, 48kHz) que o
+  // processo principal do Electron manda via IPC — vindos da captura de
+  // um app específico — num MediaStream de verdade, que o WebRTC
+  // consegue enviar pros outros participantes. Usa um ScriptProcessorNode
+  // (mais simples de implementar que um AudioWorklet) que vai "puxando"
+  // amostras de uma fila conforme o áudio toca.
+  function criarPipelineDeAudioPorProcesso() {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    const contexto = new AudioContext({ sampleRate: 48000 });
+    const destino = contexto.createMediaStreamDestination();
+
+    const filaEsquerda = [];
+    const filaDireita = [];
+    const TAMANHO_MAXIMO_FILA = 48000 * 2; // ~2 segundos de margem de segurança
+
+    // 4096 amostras por bloco, 0 canais de entrada (não vem do
+    // microfone), 2 canais de saída (estéreo).
+    const processador = contexto.createScriptProcessor(4096, 0, 2);
+    processador.onaudioprocess = (evento) => {
+      const saidaEsquerda = evento.outputBuffer.getChannelData(0);
+      const saidaDireita = evento.outputBuffer.getChannelData(1);
+      for (let i = 0; i < saidaEsquerda.length; i++) {
+        saidaEsquerda[i] = filaEsquerda.length ? filaEsquerda.shift() : 0;
+        saidaDireita[i] = filaDireita.length ? filaDireita.shift() : 0;
+      }
+    };
+    processador.connect(destino);
+
+    function receberChunk(chunkBuffer) {
+      // chunkBuffer: PCM 16-bit assinado, estéreo, intercalado (LRLRLR...)
+      const bytes = new Uint8Array(chunkBuffer);
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const totalAmostras = Math.floor(bytes.length / 4); // 2 bytes x 2 canais por amostra
+
+      for (let i = 0; i < totalAmostras; i++) {
+        const offset = i * 4;
+        const amostraEsquerda = view.getInt16(offset, true) / 32768;
+        const amostraDireita = view.getInt16(offset + 2, true) / 32768;
+        if (filaEsquerda.length < TAMANHO_MAXIMO_FILA) filaEsquerda.push(amostraEsquerda);
+        if (filaDireita.length < TAMANHO_MAXIMO_FILA) filaDireita.push(amostraDireita);
+      }
+    }
+
+    return {
+      stream: destino.stream,
+      receberChunk,
+      destruir: () => {
+        processador.disconnect();
+        contexto.close().catch(() => {});
+      },
+    };
   }
 
   useEffect(() => {
@@ -228,7 +294,14 @@ const VoiceChannel = forwardRef(function VoiceChannel(
 
       pc.ontrack = (e) => {
         if (e.track.kind === 'audio') {
-          let audio = audiosRef.current[socketId];
+          // Se essa faixa de áudio veio junto de um vídeo no mesmo
+          // stream, é o áudio do sistema de quem está compartilhando a
+          // tela — precisa de um elemento <audio> separado do
+          // microfone, senão um substitui o outro.
+          const ehAudioDeTela = e.streams[0]?.getVideoTracks().length > 0;
+          const bucket = ehAudioDeTela ? audiosTelaRef : audiosRef;
+
+          let audio = bucket.current[socketId];
           if (!audio) {
             audio = new Audio();
             audio.autoplay = true;
@@ -237,7 +310,7 @@ const VoiceChannel = forwardRef(function VoiceChannel(
             if (configuracaoAudioRef.current.foneId && audio.setSinkId) {
               audio.setSinkId(configuracaoAudioRef.current.foneId).catch(() => {});
             }
-            audiosRef.current[socketId] = audio;
+            bucket.current[socketId] = audio;
           }
           audio.srcObject = e.streams[0];
         } else if (e.track.kind === 'video') {
@@ -266,6 +339,10 @@ const VoiceChannel = forwardRef(function VoiceChannel(
         audiosRef.current[socketId].srcObject = null;
         delete audiosRef.current[socketId];
       }
+      if (audiosTelaRef.current[socketId]) {
+        audiosTelaRef.current[socketId].srcObject = null;
+        delete audiosTelaRef.current[socketId];
+      }
       setTelasRemotas((atual) => {
         const copia = { ...atual };
         delete copia[socketId];
@@ -275,6 +352,10 @@ const VoiceChannel = forwardRef(function VoiceChannel(
 
     function removerTelaRemota(socketId) {
       telasComSomRef.current.delete(socketId);
+      if (audiosTelaRef.current[socketId]) {
+        audiosTelaRef.current[socketId].srcObject = null;
+        delete audiosTelaRef.current[socketId];
+      }
       setTelasRemotas((atual) => {
         const copia = { ...atual };
         const stream = copia[socketId];
@@ -381,6 +462,15 @@ const VoiceChannel = forwardRef(function VoiceChannel(
       contextoEntradaRef.current = null;
       telaLocalRef.current?.getTracks().forEach((t) => t.stop());
       telaLocalRef.current = null;
+      if (pipelineAudioProcessoRef.current) {
+        pipelineAudioProcessoRef.current.destruir();
+        pipelineAudioProcessoRef.current = null;
+      }
+      if (pararOuvinteAudioTelaRef.current) {
+        pararOuvinteAudioTelaRef.current();
+        pararOuvinteAudioTelaRef.current = null;
+      }
+      window.electronAPI?.pararCapturaProcesso?.();
       setParticipantes([]);
       setTelasRemotas({});
       telasComSomRef.current.clear();
@@ -433,15 +523,22 @@ const VoiceChannel = forwardRef(function VoiceChannel(
         window.electronAPI.definirFonteCompartilhamento(config.fonteId);
       }
 
+      // Se o usuário marcou "capturar só o áudio desse app", não pedimos
+      // o loopback do sistema inteiro no getDisplayMedia — em vez disso,
+      // usamos a captura por processo específico do Electron.
+      const usarAudioPorApp = !!config?.capturarAudioApp && !!config?.tituloJanela;
+
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           width: { ideal: dimensoes.largura, max: dimensoes.largura },
           height: { ideal: dimensoes.altura, max: dimensoes.altura },
           frameRate: { ideal: fps, max: fps },
         },
+        audio: !usarAudioPorApp,
       });
 
       const videoTrack = stream.getVideoTracks()[0];
+      let audioTrackTela = stream.getAudioTracks()[0]; // pode não vir, dependendo do sistema
       // "detail" preserva nitidez de texto/interface melhor que "motion"
       // pra compartilhamento de tela cheia.
       videoTrack.contentHint = 'detail';
@@ -450,6 +547,23 @@ const VoiceChannel = forwardRef(function VoiceChannel(
       telaLocalRef.current = stream;
       setCompartilhandoTela(true);
       tocarEfeito('transmitir');
+
+      if (usarAudioPorApp) {
+        const resultado = await window.electronAPI?.iniciarCapturaProcesso(config.tituloJanela);
+        if (resultado?.sucesso) {
+          const pipeline = criarPipelineDeAudioPorProcesso();
+          pipelineAudioProcessoRef.current = pipeline;
+          pararOuvinteAudioTelaRef.current = window.electronAPI.onAudioTelaChunk(pipeline.receberChunk);
+          audioTrackTela = pipeline.stream.getAudioTracks()[0];
+        } else {
+          // Não é motivo pra cancelar a transmissão inteira — só avisa
+          // que vai sem áudio isolado dessa vez.
+          setErroCompartilhamento(
+            `Não consegui capturar o áudio só desse app (${resultado?.mensagem || 'motivo desconhecido'}). Compartilhando sem esse áudio específico.`,
+          );
+          audioTrackTela = null;
+        }
+      }
 
       const alturaNativa = videoTrack.getSettings().height || dimensoes.altura;
       const alturaAlvo = res === '1080p' ? 1080 : 720;
@@ -469,6 +583,17 @@ const VoiceChannel = forwardRef(function VoiceChannel(
           },
         ];
         remetente.setParameters(parametros).catch(() => {});
+
+        // Áudio do sistema (jogo, música, etc.) — vai como uma segunda
+        // faixa de áudio, separada da sua voz no microfone.
+        if (audioTrackTela) {
+          const remetenteAudio = pc.addTrack(audioTrackTela, stream);
+          const parametrosAudio = remetenteAudio.getParameters();
+          parametrosAudio.encodings = (parametrosAudio.encodings?.length ? parametrosAudio.encodings : [{}]).map(
+            (encoding) => ({ ...encoding, maxBitrate: BITRATE_AUDIO_TELA }),
+          );
+          remetenteAudio.setParameters(parametrosAudio).catch(() => {});
+        }
       });
       await renegociarComTodos();
     } catch (err) {
@@ -484,15 +609,35 @@ const VoiceChannel = forwardRef(function VoiceChannel(
     const stream = telaLocalRef.current;
     if (!stream) return;
     const videoTrack = stream.getVideoTracks()[0];
+    const audioTrackSistema = stream.getAudioTracks()[0];
+    const audioTrackProcesso = pipelineAudioProcessoRef.current?.stream.getAudioTracks()[0];
 
     Object.values(conexoesRef.current).forEach((pc) => {
-      const remetente = pc.getSenders().find((s) => s.track === videoTrack);
-      if (remetente) pc.removeTrack(remetente);
+      pc.getSenders().forEach((remetente) => {
+        if (
+          remetente.track === videoTrack ||
+          (audioTrackSistema && remetente.track === audioTrackSistema) ||
+          (audioTrackProcesso && remetente.track === audioTrackProcesso)
+        ) {
+          pc.removeTrack(remetente);
+        }
+      });
     });
 
     socket.emit('tela-parada');
     stream.getTracks().forEach((t) => t.stop());
     telaLocalRef.current = null;
+
+    if (pipelineAudioProcessoRef.current) {
+      pipelineAudioProcessoRef.current.destruir();
+      pipelineAudioProcessoRef.current = null;
+    }
+    if (pararOuvinteAudioTelaRef.current) {
+      pararOuvinteAudioTelaRef.current();
+      pararOuvinteAudioTelaRef.current = null;
+    }
+    window.electronAPI?.pararCapturaProcesso?.();
+
     setCompartilhandoTela(false);
     await renegociarComTodos();
   }
