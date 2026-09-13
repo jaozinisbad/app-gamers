@@ -21,9 +21,10 @@ app.use(cors());
 
 const io = new Server(server, {
   cors: { origin: '*' },
+  maxHttpBufferSize: 8e6,
 });
 
-app.use(express.json());
+app.use(express.json({ limit: '8mb' }));
 
 app.get('/', (req, res) => {
   res.send('Servidor do app de comunicação está no ar!');
@@ -144,20 +145,27 @@ io.on('connection', (socket) => {
   });
 
   // Enviar mensagem: salva no banco e retransmite pra todo mundo na sala do canal.
-  socket.on('enviar-mensagem', ({ canalId, conteudo }) => {
-    if (!conteudo || !conteudo.trim()) return;
+  socket.on('enviar-mensagem', ({ canalId, conteudo, anexo }) => {
+    const texto = typeof conteudo === 'string' ? conteudo.trim() : '';
+    if (!texto && !anexo?.url) return;
 
     const canal = servidorDoCanal(canalId);
     if (!canal || !ehMembro(canal.servidor_id, socket.usuario.id)) return;
 
+    if (anexo?.url && (!String(anexo.url).startsWith('data:') || String(anexo.url).length > 7000000)) return;
+
     const resultado = db
-      .prepare('INSERT INTO mensagens (canal_id, usuario_id, conteudo) VALUES (?, ?, ?)')
-      .run(canalId, socket.usuario.id, conteudo.trim());
+      .prepare('INSERT INTO mensagens (canal_id, usuario_id, conteudo, anexo_nome, anexo_tipo, anexo_url, anexo_tamanho) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(canalId, socket.usuario.id, texto, anexo?.nome || null, anexo?.tipo || null, anexo?.url || null, Number(anexo?.tamanho) || null);
 
     const mensagem = {
       id: resultado.lastInsertRowid,
-      conteudo: conteudo.trim(),
+      conteudo: texto,
       autor: socket.usuario.nome,
+      anexo_nome: anexo?.nome || null,
+      anexo_tipo: anexo?.tipo || null,
+      anexo_url: anexo?.url || null,
+      anexo_tamanho: Number(anexo?.tamanho) || null,
       criado_em: new Date().toISOString(),
     };
 

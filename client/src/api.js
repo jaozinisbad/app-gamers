@@ -1,4 +1,5 @@
-export const SERVER_URL = 'https://voltage-phoney-stunt.ngrok-free.dev';
+const URL_PUBLICA = 'https://voltage-phoney-stunt.ngrok-free.dev';
+export const SERVER_URL = import.meta.env.VITE_SERVER_URL || (import.meta.env.DEV ? 'http://localhost:3001' : URL_PUBLICA);
 
 export async function apiFetch(caminho, token, opcoes = {}) {
   const resp = await fetch(`${SERVER_URL}${caminho}`, {
@@ -13,7 +14,13 @@ export async function apiFetch(caminho, token, opcoes = {}) {
   });
   const dados = await resp.json().catch(() => ({}));
   if (!resp.ok) {
-    throw new Error(dados.erro || 'Erro ao falar com o servidor.');
+    const erro = new Error(dados.erro || (resp.status === 401 || resp.status === 403 ? 'Sua sessão expirou. Entre novamente.' : 'Erro ao falar com o servidor.'));
+    erro.status = resp.status;
+    if (resp.status === 401 || resp.status === 403) {
+      localStorage.removeItem('sessao');
+      window.dispatchEvent(new Event('sessao-invalida'));
+    }
+    throw erro;
   }
   return dados;
 }

@@ -8,9 +8,11 @@ export default function ProfileModal({ usuario, onFechar, onSalvar }) {
   const [status, setStatus] = useState(usuario.status || 'Disponível');
   const [avatarCor, setAvatarCor] = useState(usuario.avatar_cor || '#5865f2');
   const [avatarUrl, setAvatarUrl] = useState(usuario.avatar_url || null);
+  const [bannerUrl, setBannerUrl] = useState(usuario.banner_url || null);
   const [erro, setErro] = useState('');
   const [salvando, setSalvando] = useState(false);
   const inputFotoRef = useRef(null);
+  const inputBannerRef = useRef(null);
 
   async function comprimirFoto(arquivo) {
     return new Promise((resolve, reject) => {
@@ -73,6 +75,45 @@ export default function ProfileModal({ usuario, onFechar, onSalvar }) {
     }
   }
 
+  async function selecionarBanner() {
+    const arquivo = inputBannerRef.current?.files?.[0];
+    if (!arquivo) return;
+    try {
+      if (!arquivo.type.startsWith('image/')) throw new Error('Selecione uma imagem válida.');
+      if (arquivo.size > 5 * 1024 * 1024) throw new Error('Imagem muito grande (máximo 5MB).');
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = 900;
+            canvas.height = 260;
+            const ctx = canvas.getContext('2d');
+            const escala = Math.max(canvas.width / img.width, canvas.height / img.height);
+            const largura = img.width * escala;
+            const altura = img.height * escala;
+            ctx.drawImage(img, (canvas.width - largura) / 2, (canvas.height - altura) / 2, largura, altura);
+            canvas.toBlob((blob) => {
+              if (!blob) return reject(new Error('Erro ao comprimir banner.'));
+              const readerFinal = new FileReader();
+              readerFinal.onload = () => resolve(readerFinal.result);
+              readerFinal.readAsDataURL(blob);
+            }, 'image/jpeg', 0.72);
+          };
+          img.onerror = () => reject(new Error('Erro ao carregar imagem.'));
+          img.src = event.target.result;
+        };
+        reader.onerror = () => reject(new Error('Erro ao ler arquivo.'));
+        reader.readAsDataURL(arquivo);
+      });
+      setBannerUrl(base64);
+      setErro('');
+    } catch (err) {
+      setErro(err.message);
+    }
+  }
+
   function removerFoto() {
     setAvatarUrl(null);
     if (inputFotoRef.current) {
@@ -89,6 +130,7 @@ export default function ProfileModal({ usuario, onFechar, onSalvar }) {
       if (avatarUrl) {
         dados.avatar_url = avatarUrl;
       }
+      dados.banner_url = bannerUrl;
       await onSalvar(dados);
       onFechar();
     } catch (err) {
@@ -107,7 +149,19 @@ export default function ProfileModal({ usuario, onFechar, onSalvar }) {
             <h2>Personalizar perfil</h2>
           </div>
           <div className="profile-modal__preview">
+            <div className="profile-banner-preview" style={bannerUrl ? { backgroundImage: `url(${bannerUrl})` } : undefined} />
             <Avatar nome={nome} avatarUrl={avatarUrl} avatarCor={avatarCor} tamanho="lg" />
+          </div>
+        </div>
+
+        <div className="profile-field">
+          Faixa do perfil
+          <div className="profile-foto-acoes">
+            <input ref={inputBannerRef} type="file" accept="image/*" onChange={selecionarBanner} style={{ display: 'none' }} />
+            <button type="button" onClick={() => inputBannerRef.current?.click()} className="btn-foto-upload">
+              {bannerUrl ? '🖼️ Trocar faixa' : '🖼️ Adicionar faixa'}
+            </button>
+            {bannerUrl && <button type="button" onClick={() => { setBannerUrl(null); inputBannerRef.current.value = ''; }} className="btn-foto-remover">❌ Remover faixa</button>}
           </div>
         </div>
 

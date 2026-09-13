@@ -51,6 +51,7 @@ export default function ChannelSidebar({
   vozEstado, // { micMudo, audioMudo, compartilhandoTela }
   vozAcoes, // { onAlternarMic, onAlternarAudio, onAlternarTela, onDesconectar }
   nomeUsuarioNaVoz,
+  onAbrirServidorConfiguracao,
 }) {
   const canaisTexto = canais.filter((c) => c.tipo === 'texto');
   const canaisVoz = canais.filter((c) => c.tipo === 'voz');
@@ -67,6 +68,9 @@ export default function ChannelSidebar({
           >
             Convite: {codigoConvite}
           </span>
+        )}
+        {souDono && (
+          <button type="button" className="channel-sidebar__configurar-servidor" title="Configurar servidor" onClick={onAbrirServidorConfiguracao}>⚙️</button>
         )}
         {souDono && (
           <button

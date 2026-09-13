@@ -34,7 +34,7 @@ export default function ServerSidebar({ servidores, servidorAtivoId, viewAtiva, 
           onClick={() => onSelecionar(s.id)}
         >
           <span className="tooltip-servidor">{s.nome}</span>
-          {s.nome.slice(0, 2).toUpperCase()}
+          {s.icone_url ? <img src={s.icone_url} alt="" className="server-icon__imagem" /> : s.nome.slice(0, 2).toUpperCase()}
         </div>
       ))}
 

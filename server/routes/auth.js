@@ -20,6 +20,7 @@ function dadosPublicos(usuario) {
     email: usuario.email,
     avatar_cor: usuario.avatar_cor || '#5865f2',
     avatar_url: usuario.avatar_url || null,
+    banner_url: usuario.banner_url || null,
     status: usuario.status || 'Disponível',
   };
 }
@@ -79,7 +80,7 @@ router.post('/login', async (req, res) => {
 });
 
 router.get('/perfil', autenticar, (req, res) => {
-  const usuario = db.prepare('SELECT id, nome, email, avatar_cor, avatar_url, status FROM usuarios WHERE id = ?').get(req.usuario.id);
+  const usuario = db.prepare('SELECT id, nome, email, avatar_cor, avatar_url, banner_url, status FROM usuarios WHERE id = ?').get(req.usuario.id);
   res.json(dadosPublicos(usuario));
 });
 
@@ -88,6 +89,7 @@ router.patch('/perfil', autenticar, (req, res) => {
   const status = String(req.body.status || '').trim();
   const avatarCor = String(req.body.avatar_cor || '').trim();
   const avatarUrl = req.body.avatar_url ? String(req.body.avatar_url).trim() : null;
+  const bannerUrl = req.body.banner_url ? String(req.body.banner_url).trim() : null;
 
   if (!nome || nome.length > 32) {
     return res.status(400).json({ erro: 'O nome precisa ter entre 1 e 32 caracteres.' });
@@ -110,10 +112,14 @@ router.patch('/perfil', autenticar, (req, res) => {
     }
   }
 
-  db.prepare('UPDATE usuarios SET nome = ?, status = ?, avatar_cor = ?, avatar_url = ? WHERE id = ?')
-    .run(nome, status || 'Disponível', avatarCor, avatarUrl, req.usuario.id);
+  if (bannerUrl && (!bannerUrl.startsWith('data:image/') || bannerUrl.length > 2000000)) {
+    return res.status(400).json({ erro: 'Banner deve ser uma imagem válida de até ~1,5MB.' });
+  }
 
-  const usuario = db.prepare('SELECT id, nome, email, avatar_cor, avatar_url, status FROM usuarios WHERE id = ?').get(req.usuario.id);
+  db.prepare('UPDATE usuarios SET nome = ?, status = ?, avatar_cor = ?, avatar_url = ?, banner_url = ? WHERE id = ?')
+    .run(nome, status || 'Disponível', avatarCor, avatarUrl, bannerUrl, req.usuario.id);
+
+  const usuario = db.prepare('SELECT id, nome, email, avatar_cor, avatar_url, banner_url, status FROM usuarios WHERE id = ?').get(req.usuario.id);
   const token = gerarToken(usuario);
   res.json({ token, usuario: dadosPublicos(usuario) });
 });

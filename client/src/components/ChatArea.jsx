@@ -4,7 +4,9 @@ import { apiFetch } from '../api.js';
 export default function ChatArea({ canal, statusConexao, socket, token, nomeUsuario }) {
   const [mensagens, setMensagens] = useState([]);
   const [texto, setTexto] = useState('');
+  const [arquivo, setArquivo] = useState(null);
   const fimDaLista = useRef(null);
+  const inputArquivo = useRef(null);
 
   // Carrega o histórico e entra na sala do canal sempre que ele muda.
   useEffect(() => {
@@ -43,9 +45,27 @@ export default function ChatArea({ canal, statusConexao, socket, token, nomeUsua
 
   function enviar(e) {
     e.preventDefault();
-    if (!texto.trim() || !socket) return;
-    socket.emit('enviar-mensagem', { canalId: canal.id, conteudo: texto.trim() });
-    setTexto('');
+    if ((!texto.trim() && !arquivo) || !socket) return;
+    if (arquivo && arquivo.size > 5 * 1024 * 1024) {
+      window.alert('O arquivo precisa ter no máximo 5MB.');
+      return;
+    }
+    const enviarComDados = (url) => {
+      socket.emit('enviar-mensagem', {
+        canalId: canal.id,
+        conteudo: texto.trim(),
+        anexo: arquivo ? { nome: arquivo.name, tipo: arquivo.type || 'application/octet-stream', tamanho: arquivo.size, url } : null,
+      });
+      setTexto('');
+      setArquivo(null);
+      if (inputArquivo.current) inputArquivo.current.value = '';
+    };
+    if (!arquivo) enviarComDados(null);
+    else {
+      const leitor = new FileReader();
+      leitor.onload = () => enviarComDados(leitor.result);
+      leitor.readAsDataURL(arquivo);
+    }
   }
 
   const conectado = statusConexao === 'conectado ao servidor';
@@ -69,18 +89,30 @@ export default function ChatArea({ canal, statusConexao, socket, token, nomeUsua
                   <span className="autor">{m.autor}</span>
                   <span className="hora">{new Date(m.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
                   <span className="conteudo">{m.conteudo}</span>
+                  {m.anexo_url && (
+                    <div className="chat-anexo">
+                      {m.anexo_tipo?.startsWith('image/') ? (
+                        <img src={m.anexo_url} alt={m.anexo_nome || 'Imagem enviada'} />
+                      ) : (
+                        <a href={m.anexo_url} download={m.anexo_nome || 'arquivo'}>{m.anexo_nome || 'Baixar arquivo'}</a>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
               <div ref={fimDaLista} />
             </div>
           </div>
           <form className="chat-input-area" onSubmit={enviar}>
+            <button type="button" className="chat-anexo-botao" onClick={() => inputArquivo.current?.click()} title="Anexar imagem ou arquivo">📎</button>
+            <input ref={inputArquivo} type="file" hidden onChange={(e) => setArquivo(e.target.files?.[0] || null)} />
             <input
               className="chat-input"
               placeholder={`Conversar em #${canal.nome}`}
               value={texto}
               onChange={(e) => setTexto(e.target.value)}
             />
+            {arquivo && <span className="chat-arquivo-selecionado" title={arquivo.name}>📄 {arquivo.name}</span>}
           </form>
         </>
       ) : (

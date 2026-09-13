@@ -12,6 +12,8 @@ import SettingsModal from './components/SettingsModal.jsx';
 import ScreenShareSourcePicker from './components/ScreenShareSourcePicker.jsx';
 import FriendsScreen from './components/FriendsScreen.jsx';
 import DirectMessageScreen from './components/DirectMessageScreen.jsx';
+import ServerSettingsModal from './components/ServerSettingsModal.jsx';
+import MemberSidebar from './components/MemberSidebar.jsx';
 import { SERVER_URL, apiFetch } from './api.js';
 
 export default function App() {
@@ -25,6 +27,8 @@ export default function App() {
   const [servidores, setServidores] = useState([]);
   const [servidorAtivoId, setServidorAtivoId] = useState(null);
   const [canais, setCanais] = useState([]);
+  const [membrosServidor, setMembrosServidor] = useState([]);
+  const [cargosServidor, setCargosServidor] = useState([]);
   const [canalAtivo, setCanalAtivo] = useState(null);
   const [canalDeVoz, setCanalDeVoz] = useState(null);
   const [vozEstado, setVozEstado] = useState({
@@ -40,6 +44,7 @@ export default function App() {
   const [modalAberto, setModalAberto] = useState(false);
   const [perfilAberto, setPerfilAberto] = useState(false);
   const [settingsAberto, setSettingsAberto] = useState(false);
+  const [servidorConfiguracaoAberto, setServidorConfiguracaoAberto] = useState(false);
   const [pickerTelaAberto, setPickerTelaAberto] = useState(false);
   const [atualizacaoPronta, setAtualizacaoPronta] = useState(false);
 
@@ -58,6 +63,18 @@ export default function App() {
   useEffect(() => {
     if (!window.electronAPI?.onAtualizacaoPronta) return;
     window.electronAPI.onAtualizacaoPronta(() => setAtualizacaoPronta(true));
+  }, []);
+
+  useEffect(() => {
+    function aoInvalidarSessao() {
+      setSessao(null);
+      setSocket((atual) => {
+        atual?.disconnect();
+        return null;
+      });
+    }
+    window.addEventListener('sessao-invalida', aoInvalidarSessao);
+    return () => window.removeEventListener('sessao-invalida', aoInvalidarSessao);
   }, []);
 
   // Conecta o socket assim que há sessão.
@@ -141,6 +158,12 @@ export default function App() {
         setCanalAtivo(lista[0] || null);
       })
       .catch(() => {});
+    apiFetch(`/api/servidores/${servidorAtivoId}/membros`, sessao.token)
+      .then(setMembrosServidor)
+      .catch(() => setMembrosServidor([]));
+    apiFetch(`/api/servidores/${servidorAtivoId}/cargos`, sessao.token)
+      .then(setCargosServidor)
+      .catch(() => setCargosServidor([]));
   }, [sessao, servidorAtivoId]);
 
   function autenticar(token, usuario) {
@@ -210,6 +233,23 @@ export default function App() {
     setSessao(novaSessao);
   }
 
+  async function salvarServidor(dados) {
+    const atualizado = await apiFetch(`/api/servidores/${servidorAtivoId}`, sessao.token, { method: 'PATCH', body: JSON.stringify(dados) });
+    setServidores((atual) => atual.map((servidor) => servidor.id === servidorAtivoId ? { ...servidor, ...atualizado } : servidor));
+  }
+
+  async function criarCargo(dados) {
+    const novoCargo = await apiFetch(`/api/servidores/${servidorAtivoId}/cargos`, sessao.token, { method: 'POST', body: JSON.stringify(dados) });
+    setCargosServidor((atual) => [...atual, novoCargo]);
+  }
+
+  async function atribuirCargo(usuarioId, cargoId, remover = false) {
+    const caminho = `/api/servidores/${servidorAtivoId}/membros/${usuarioId}/cargos/${cargoId}`;
+    await apiFetch(caminho, sessao.token, { method: remover ? 'DELETE' : 'POST' });
+    const membrosAtualizados = await apiFetch(`/api/servidores/${servidorAtivoId}/membros`, sessao.token);
+    setMembrosServidor(membrosAtualizados);
+  }
+
   function selecionarCanal(canal) {
     setCanalAtivo(canal);
     if (canal.tipo === 'voz') setCanalDeVoz(canal);
@@ -261,6 +301,7 @@ export default function App() {
     status: sessao.usuario.status,
     avatarCor: sessao.usuario.avatar_cor,
     avatarUrl: sessao.usuario.avatar_url,
+    banner_url: sessao.usuario.banner_url,
     online: true,
   };
 
@@ -303,6 +344,7 @@ export default function App() {
             vozEstado={vozEstado}
             vozAcoes={vozAcoes}
             nomeUsuarioNaVoz={sessao.usuario.nome}
+            onAbrirServidorConfiguracao={() => setServidorConfiguracaoAberto(true)}
           />
           <ChatArea
             canal={canalAtivo}
@@ -311,6 +353,7 @@ export default function App() {
             token={sessao.token}
             nomeUsuario={sessao.usuario.nome}
           />
+          <MemberSidebar membros={membrosServidor} />
         </>
       )}
 
@@ -364,6 +407,18 @@ export default function App() {
             // Configuração já foi salva em localStorage no componente
             voiceChannelRef.current?.aplicarConfiguracao(config);
           }}
+        />
+      )}
+
+      {servidorConfiguracaoAberto && servidorAtivo && (
+        <ServerSettingsModal
+          servidor={servidorAtivo}
+          cargos={cargosServidor}
+          onFechar={() => setServidorConfiguracaoAberto(false)}
+          onSalvar={salvarServidor}
+          onCriarCargo={criarCargo}
+          membros={membrosServidor}
+          onAtribuirCargo={atribuirCargo}
         />
       )}
 
