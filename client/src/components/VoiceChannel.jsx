@@ -159,10 +159,26 @@ const VoiceChannel = forwardRef(function VoiceChannel(
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
-        sampleRate: 48000,
+        sampleRate: { ideal: 48000 },
       },
     };
-    const streamBruta = await navigator.mediaDevices.getUserMedia(constraints);
+    let streamBruta;
+    try {
+      streamBruta = await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (err) {
+      if (err.name !== 'OverconstrainedError' || !deviceId) throw err;
+
+      // O dispositivo salvo pode ter sido removido ou renomeado no Windows.
+      // Nesse caso, deixa o sistema escolher o microfone padrão.
+      streamBruta = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: { ideal: 48000 },
+        },
+      });
+    }
 
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     const contexto = new AudioContext();
@@ -372,7 +388,14 @@ const VoiceChannel = forwardRef(function VoiceChannel(
         setConectando(false);
         socket.emit('entrar-canal-voz', canal.id);
       } catch (err) {
-        setErro('Não foi possível acessar o microfone. Verifique as permissões do sistema.');
+        const mensagem = err.name === 'NotFoundError'
+          ? 'Nenhum microfone foi encontrado neste computador.'
+          : err.name === 'NotAllowedError' || err.name === 'SecurityError'
+            ? 'O acesso ao microfone foi bloqueado. Verifique as permissões do Windows.'
+            : err.name === 'OverconstrainedError'
+              ? 'O microfone selecionado não está disponível. Escolha outro nas configurações de áudio.'
+              : 'Não foi possível acessar o microfone. Verifique as configurações de áudio.';
+        setErro(mensagem);
         setConectando(false);
       }
     }
