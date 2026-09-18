@@ -38,7 +38,7 @@ async function imagemBase64(file, largura, altura) {
   });
 }
 
-export default function ServerSettingsModal({ servidor, cargos, membros = [], onFechar, onSalvar, onCriarCargo, onAtribuirCargo }) {
+export default function ServerSettingsModal({ servidor, cargos, membros = [], onFechar, onSalvar, onCriarCargo, onAtribuirCargo, onBanir, onExpulsarMembro }) {
   const [nome, setNome] = useState(servidor.nome || '');
   const [descricao, setDescricao] = useState(servidor.descricao || '');
   const [iconeUrl, setIconeUrl] = useState(servidor.icone_url || null);
@@ -149,6 +149,20 @@ export default function ServerSettingsModal({ servidor, cargos, membros = [], on
                 <div className="cargo-membro-linha" key={membro.id}>
                   <span>{membro.nome}</span>
                   <div>{membro.cargos?.map((cargo) => <button type="button" className="cargo-chip cargo-chip--remover" style={{ color: cargo.cor }} key={cargo.id} onClick={() => onAtribuirCargo(membro.id, cargo.id, true)} title="Remover cargo">{cargo.nome} ×</button>)}</div>
+                  {(onExpulsarMembro || onBanir) && (
+                    <div className="cargo-membro-acoes">
+                      {onExpulsarMembro && (
+                        <button type="button" className="btn-foto-remover" onClick={() => { if (window.confirm(`Expulsar ${membro.nome} do servidor?`)) onExpulsarMembro(membro.id); }}>
+                          Expulsar
+                        </button>
+                      )}
+                      {onBanir && (
+                        <button type="button" className="btn-foto-remover" onClick={() => { if (window.confirm(`Banir ${membro.nome}? Ele não vai conseguir voltar, nem com um novo convite.`)) onBanir(membro.id); }}>
+                          Banir
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

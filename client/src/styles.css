@@ -295,6 +295,43 @@ html, body, #root {
   color: #949ba4;
   padding: 8px 8px 4px;
   letter-spacing: 0.02em;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.channel-group-label__add {
+  background: none;
+  border: none;
+  color: #949ba4;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.channel-group-label__add:hover {
+  color: #fff;
+}
+
+.channel-item__apagar {
+  background: none;
+  border: none;
+  color: #949ba4;
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+
+.channel-item:hover .channel-item__apagar,
+.voz-participante-item:hover .channel-item__apagar {
+  opacity: 1;
+}
+
+.channel-item__apagar:hover {
+  color: #f23f42;
 }
 
 .channel-item {
@@ -992,8 +1029,32 @@ html, body, #root {
 
 .chat-mensagem {
   display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-mensagem:hover .chat-mensagem__apagar {
+  opacity: 1;
+}
+
+.chat-mensagem__cabecalho {
+  display: flex;
   gap: 8px;
   align-items: baseline;
+}
+
+.chat-mensagem__apagar {
+  background: none;
+  border: none;
+  color: #949ba4;
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0;
+  margin-left: auto;
+}
+
+.chat-mensagem__apagar:hover {
+  color: #f23f42;
 }
 
 .chat-mensagem .autor {

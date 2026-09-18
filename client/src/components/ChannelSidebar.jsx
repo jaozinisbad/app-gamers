@@ -39,6 +39,7 @@ export default function ChannelSidebar({
   codigoConvite,
   souDono,
   onExcluirServidor,
+  minhasPermissoes = {},
   canais,
   canalAtivoId,
   onSelecionar,
@@ -47,14 +48,19 @@ export default function ChannelSidebar({
   onAbrirPerfil,
   onAbrirConfiguracao,
   canalDeVoz, // { id, nome } | null — canal de voz atualmente conectado
-  presencaVoz, // { canalId: [{ socketId, nome, avatarCor, avatarUrl }] } — de QUALQUER canal, mesmo sem estar nele
+  presencaVoz, // { canalId: [{ socketId, nome, avatarCor, avatarUrl, usuarioId }] } — de QUALQUER canal, mesmo sem estar nele
   vozEstado, // { micMudo, audioMudo, compartilhandoTela }
   vozAcoes, // { onAlternarMic, onAlternarAudio, onAlternarTela, onDesconectar }
   nomeUsuarioNaVoz,
   onAbrirServidorConfiguracao,
+  onCriarCanal,
+  onApagarCanal,
+  onExpulsarDaCall,
 }) {
   const canaisTexto = canais.filter((c) => c.tipo === 'texto');
   const canaisVoz = canais.filter((c) => c.tipo === 'voz');
+  const podeGerenciarCanais = souDono || minhasPermissoes.gerenciar_canais;
+  const podeExpulsarCall = souDono || minhasPermissoes.expulsar_call;
 
   return (
     <div className="channel-sidebar">
@@ -69,7 +75,7 @@ export default function ChannelSidebar({
             Convite: {codigoConvite}
           </span>
         )}
-        {souDono && (
+        {(souDono || minhasPermissoes.gerenciar_servidor) && (
           <button type="button" className="channel-sidebar__configurar-servidor" title="Configurar servidor" onClick={onAbrirServidorConfiguracao}>⚙️</button>
         )}
         {souDono && (
@@ -93,7 +99,14 @@ export default function ChannelSidebar({
       </div>
 
       <div className="channel-sidebar__list">
-        <div className="channel-group-label">Canais de texto</div>
+        <div className="channel-group-label">
+          <span>Canais de texto</span>
+          {podeGerenciarCanais && (
+            <button type="button" className="channel-group-label__add" title="Criar canal de texto" onClick={() => onCriarCanal('texto')}>
+              +
+            </button>
+          )}
+        </div>
         {canaisTexto.map((c) => (
           <div
             key={c.id}
@@ -101,11 +114,31 @@ export default function ChannelSidebar({
             onClick={() => onSelecionar(c)}
           >
             <IconTexto />
-            {c.nome}
+            <span style={{ flex: 1 }}>{c.nome}</span>
+            {podeGerenciarCanais && (
+              <button
+                type="button"
+                className="channel-item__apagar"
+                title="Apagar canal"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (window.confirm(`Apagar o canal #${c.nome}?`)) onApagarCanal(c.id);
+                }}
+              >
+                🗑️
+              </button>
+            )}
           </div>
         ))}
 
-        <div className="channel-group-label">Canais de voz</div>
+        <div className="channel-group-label">
+          <span>Canais de voz</span>
+          {podeGerenciarCanais && (
+            <button type="button" className="channel-group-label__add" title="Criar canal de voz" onClick={() => onCriarCanal('voz')}>
+              +
+            </button>
+          )}
+        </div>
         {canaisVoz.map((c) => {
           const listaPresenca = presencaVoz?.[c.id] || [];
           return (
@@ -115,9 +148,22 @@ export default function ChannelSidebar({
                 onClick={() => onSelecionar(c)}
               >
                 <IconVoz />
-                {c.nome}
+                <span style={{ flex: 1 }}>{c.nome}</span>
                 {listaPresenca.length > 0 && (
                   <span className="voz-contador-participantes">{listaPresenca.length}</span>
+                )}
+                {podeGerenciarCanais && (
+                  <button
+                    type="button"
+                    className="channel-item__apagar"
+                    title="Apagar canal"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (window.confirm(`Apagar o canal ${c.nome}?`)) onApagarCanal(c.id);
+                    }}
+                  >
+                    🗑️
+                  </button>
                 )}
               </div>
               {listaPresenca.length > 0 && (
@@ -132,8 +178,20 @@ export default function ChannelSidebar({
                           avatarCor={souEu ? usuario.avatarCor : p.avatarCor || '#5865f2'}
                           tamanho="sm"
                         />
-                        {p.nome}
-                        {souEu ? ' (você)' : ''} {souEu && vozEstado.micMudo ? '🔇' : ''}
+                        <span style={{ flex: 1 }}>
+                          {p.nome}
+                          {souEu ? ' (você)' : ''} {souEu && vozEstado.micMudo ? '🔇' : ''}
+                        </span>
+                        {!souEu && podeExpulsarCall && (
+                          <button
+                            type="button"
+                            className="channel-item__apagar"
+                            title={`Expulsar ${p.nome} da call`}
+                            onClick={() => onExpulsarDaCall(c.id, p.usuarioId)}
+                          >
+                            ✖
+                          </button>
+                        )}
                       </div>
                     );
                   })}

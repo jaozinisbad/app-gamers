@@ -319,4 +319,46 @@ router.get('/servidores/:id/canais', (req, res) => {
   res.json(canais);
 });
 
-module.exports = { router, ehMembro };
+// Cria um canal novo (texto ou voz) no servidor.
+router.post('/servidores/:id/canais', (req, res) => {
+  const servidorId = Number(req.params.id);
+  if (!temPermissao(servidorId, req.usuario.id, 'gerenciar_canais')) {
+    return res.status(403).json({ erro: 'Você não tem permissão para gerenciar canais.' });
+  }
+
+  const nome = String(req.body.nome || '').trim();
+  const tipo = req.body.tipo;
+
+  if (!nome || nome.length > 32) {
+    return res.status(400).json({ erro: 'O nome do canal precisa ter entre 1 e 32 caracteres.' });
+  }
+  if (tipo !== 'texto' && tipo !== 'voz') {
+    return res.status(400).json({ erro: 'Tipo de canal inválido.' });
+  }
+
+  const resultado = db
+    .prepare('INSERT INTO canais (servidor_id, nome, tipo) VALUES (?, ?, ?)')
+    .run(servidorId, nome, tipo);
+
+  res.status(201).json({ id: resultado.lastInsertRowid, nome, tipo });
+});
+
+// Apaga um canal do servidor.
+router.delete('/servidores/:id/canais/:canalId', (req, res) => {
+  const servidorId = Number(req.params.id);
+  const canalId = Number(req.params.canalId);
+
+  if (!temPermissao(servidorId, req.usuario.id, 'gerenciar_canais')) {
+    return res.status(403).json({ erro: 'Você não tem permissão para gerenciar canais.' });
+  }
+
+  const canal = db.prepare('SELECT id FROM canais WHERE id = ? AND servidor_id = ?').get(canalId, servidorId);
+  if (!canal) return res.status(404).json({ erro: 'Canal não encontrado.' });
+
+  db.prepare('DELETE FROM mensagens WHERE canal_id = ?').run(canalId);
+  db.prepare('DELETE FROM canais WHERE id = ?').run(canalId);
+
+  res.status(204).end();
+});
+
+module.exports = { router, ehMembro, temPermissao };

@@ -129,10 +129,16 @@ export default function App() {
     }
     socket.on('presenca-voz-canal', aoAtualizarPresencaVoz);
 
+    function aoSerExpulsoDaCall() {
+      setCanalDeVoz(null);
+    }
+    socket.on('voce-foi-expulso-da-call', aoSerExpulsoDaCall);
+
     return () => {
       socket.off('amigo-online', online);
       socket.off('amigo-offline', offline);
       socket.off('presenca-voz-canal', aoAtualizarPresencaVoz);
+      socket.off('voce-foi-expulso-da-call', aoSerExpulsoDaCall);
     };
   }, [socket]);
 
@@ -250,6 +256,37 @@ export default function App() {
     setMembrosServidor(membrosAtualizados);
   }
 
+  async function criarCanal(tipo) {
+    const nome = window.prompt(tipo === 'texto' ? 'Nome do canal de texto:' : 'Nome do canal de voz:');
+    if (!nome || !nome.trim()) return;
+    const novo = await apiFetch(`/api/servidores/${servidorAtivoId}/canais`, sessao.token, {
+      method: 'POST',
+      body: JSON.stringify({ nome: nome.trim(), tipo }),
+    });
+    setCanais((atual) => [...atual, novo]);
+  }
+
+  async function apagarCanal(canalId) {
+    await apiFetch(`/api/servidores/${servidorAtivoId}/canais/${canalId}`, sessao.token, { method: 'DELETE' });
+    setCanais((atual) => atual.filter((c) => c.id !== canalId));
+    if (canalAtivo?.id === canalId) setCanalAtivo(null);
+    if (canalDeVoz?.id === canalId) setCanalDeVoz(null);
+  }
+
+  function expulsarDaCall(canalId, usuarioId) {
+    socket?.emit('expulsar-da-call', { canalId, usuarioId });
+  }
+
+  async function banirMembro(usuarioId) {
+    await apiFetch(`/api/servidores/${servidorAtivoId}/membros/${usuarioId}/banir`, sessao.token, { method: 'POST' });
+    setMembrosServidor((atual) => atual.filter((m) => m.id !== usuarioId));
+  }
+
+  async function expulsarMembro(usuarioId) {
+    await apiFetch(`/api/servidores/${servidorAtivoId}/membros/${usuarioId}`, sessao.token, { method: 'DELETE' });
+    setMembrosServidor((atual) => atual.filter((m) => m.id !== usuarioId));
+  }
+
   function selecionarCanal(canal) {
     setCanalAtivo(canal);
     if (canal.tipo === 'voz') setCanalDeVoz(canal);
@@ -305,6 +342,19 @@ export default function App() {
     online: true,
   };
 
+  // Junta as permissões de todos os cargos que o usuário logado tem
+  // nesse servidor (o dono não precisa disso — sempre pode tudo).
+  const meuMembro = membrosServidor.find((m) => m.id === sessao.usuario.id);
+  const minhasPermissoes = {};
+  meuMembro?.cargos.forEach((c) => {
+    const cargoCompleto = cargosServidor.find((cc) => cc.id === c.id);
+    if (cargoCompleto?.permissoes) {
+      Object.entries(cargoCompleto.permissoes).forEach(([chave, valor]) => {
+        if (valor) minhasPermissoes[chave] = true;
+      });
+    }
+  });
+
   return (
     <>
       <div className="app">
@@ -332,6 +382,7 @@ export default function App() {
             codigoConvite={servidorAtivo.codigo_convite}
             souDono={servidorAtivo.papel === 'dono'}
             onExcluirServidor={() => excluirServidor(servidorAtivo.id)}
+            minhasPermissoes={minhasPermissoes}
             canais={canais}
             canalAtivoId={canalAtivo.id}
             onSelecionar={selecionarCanal}
@@ -345,6 +396,9 @@ export default function App() {
             vozAcoes={vozAcoes}
             nomeUsuarioNaVoz={sessao.usuario.nome}
             onAbrirServidorConfiguracao={() => setServidorConfiguracaoAberto(true)}
+            onCriarCanal={criarCanal}
+            onApagarCanal={apagarCanal}
+            onExpulsarDaCall={expulsarDaCall}
           />
           <ChatArea
             canal={canalAtivo}
@@ -352,6 +406,8 @@ export default function App() {
             socket={socket}
             token={sessao.token}
             nomeUsuario={sessao.usuario.nome}
+            meuUsuarioId={sessao.usuario.id}
+            podeApagarMensagens={servidorAtivo.papel === 'dono' || !!minhasPermissoes.gerenciar_mensagens}
           />
           <MemberSidebar membros={membrosServidor} />
         </>
@@ -419,6 +475,8 @@ export default function App() {
           onCriarCargo={criarCargo}
           membros={membrosServidor}
           onAtribuirCargo={atribuirCargo}
+          onBanir={servidorAtivo.papel === 'dono' || minhasPermissoes.banir_membros ? banirMembro : undefined}
+          onExpulsarMembro={servidorAtivo.papel === 'dono' || minhasPermissoes.gerenciar_membros ? expulsarMembro : undefined}
         />
       )}
 

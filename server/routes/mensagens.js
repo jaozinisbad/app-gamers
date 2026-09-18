@@ -23,7 +23,7 @@ router.get('/canais/:id/mensagens', (req, res) => {
 
   const mensagens = db
     .prepare(
-      `SELECT m.id, m.conteudo, m.criado_em, m.anexo_nome, m.anexo_tipo, m.anexo_url, m.anexo_tamanho, u.nome AS autor
+      `SELECT m.id, m.conteudo, m.criado_em, m.usuario_id, m.anexo_nome, m.anexo_tipo, m.anexo_url, m.anexo_tamanho, u.nome AS autor
        FROM mensagens m
        JOIN usuarios u ON u.id = m.usuario_id
        WHERE m.canal_id = ?

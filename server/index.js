@@ -7,7 +7,7 @@ const jwt = require('jsonwebtoken');
 const { Server } = require('socket.io');
 const { db } = require('./db');
 const authRoutes = require('./routes/auth');
-const { router: servidoresRoutes, ehMembro } = require('./routes/servidores');
+const { router: servidoresRoutes, ehMembro, temPermissao } = require('./routes/servidores');
 const mensagensRoutes = require('./routes/mensagens');
 const { router: amigosRoutes, compartilhamServidor } = require('./routes/amigos');
 const { socketsPorUsuario } = require('./presenca');
@@ -77,6 +77,7 @@ function listaParticipantesDoCanal(canalId) {
   if (!mapa) return [];
   return Array.from(mapa.entries()).map(([socketId, dadosUsuario]) => ({
     socketId,
+    usuarioId: dadosUsuario.usuarioId,
     nome: dadosUsuario.nome,
     avatarCor: dadosUsuario.avatarCor,
     avatarUrl: dadosUsuario.avatarUrl,
@@ -162,6 +163,7 @@ io.on('connection', (socket) => {
       id: resultado.lastInsertRowid,
       conteudo: texto,
       autor: socket.usuario.nome,
+      usuario_id: socket.usuario.id,
       anexo_nome: anexo?.nome || null,
       anexo_tipo: anexo?.tipo || null,
       anexo_url: anexo?.url || null,
@@ -170,6 +172,22 @@ io.on('connection', (socket) => {
     };
 
     io.to(`canal-${canalId}`).emit('nova-mensagem', { canalId, mensagem });
+  });
+
+  // Apaga uma mensagem: o próprio autor sempre pode, ou quem tiver a
+  // permissão de gerenciar mensagens de outras pessoas nesse servidor.
+  socket.on('apagar-mensagem', ({ canalId, mensagemId }) => {
+    const canal = servidorDoCanal(canalId);
+    if (!canal || !ehMembro(canal.servidor_id, socket.usuario.id)) return;
+
+    const mensagem = db.prepare('SELECT usuario_id FROM mensagens WHERE id = ? AND canal_id = ?').get(mensagemId, canalId);
+    if (!mensagem) return;
+
+    const ehAutor = mensagem.usuario_id === socket.usuario.id;
+    if (!ehAutor && !temPermissao(canal.servidor_id, socket.usuario.id, 'gerenciar_mensagens')) return;
+
+    db.prepare('DELETE FROM mensagens WHERE id = ?').run(mensagemId);
+    io.to(`canal-${canalId}`).emit('mensagem-apagada', { canalId, mensagemId });
   });
 
   // --- Canal de voz: presença + sinalização WebRTC ---
@@ -191,6 +209,7 @@ io.on('connection', (socket) => {
     // Manda pro recém-chegado a lista de quem já está na chamada.
     const peers = Array.from(canalVozParticipantes[canalId].entries()).map(([socketId, dadosUsuario]) => ({
       socketId,
+      usuarioId: dadosUsuario.usuarioId,
       nome: dadosUsuario.nome,
       avatarCor: dadosUsuario.avatarCor,
       avatarUrl: dadosUsuario.avatarUrl,
@@ -198,6 +217,7 @@ io.on('connection', (socket) => {
     socket.emit('peers-existentes', { peers });
 
     canalVozParticipantes[canalId].set(socket.id, {
+      usuarioId: usuario.id,
       nome: usuario.nome,
       avatarCor: usuario.avatar_cor || '#5865f2',
       avatarUrl: usuario.avatar_url || null,
@@ -207,6 +227,7 @@ io.on('connection', (socket) => {
 
     socket.to(`voz-${canalId}`).emit('novo-peer', {
       socketId: socket.id,
+      usuarioId: usuario.id,
       nome: usuario.nome,
       avatarCor: usuario.avatar_cor || '#5865f2',
       avatarUrl: usuario.avatar_url || null,
@@ -233,6 +254,22 @@ io.on('connection', (socket) => {
   });
 
   socket.on('sair-canal-voz', () => sairDoCanalVoz(socket));
+
+  // Expulsa alguém de um canal de voz — exige permissão nesse servidor.
+  socket.on('expulsar-da-call', ({ canalId, usuarioId }) => {
+    const canal = servidorDoCanal(canalId);
+    if (!canal) return;
+    if (!temPermissao(canal.servidor_id, socket.usuario.id, 'expulsar_call')) return;
+
+    const socketsDoAlvo = socketsPorUsuario.get(usuarioId);
+    socketsDoAlvo?.forEach((socketId) => {
+      const socketAlvo = io.sockets.sockets.get(socketId);
+      if (socketAlvo?.canalVozAtual === canalId) {
+        socketAlvo.emit('voce-foi-expulso-da-call');
+        sairDoCanalVoz(socketAlvo);
+      }
+    });
+  });
 
   socket.on('tela-parada', () => {
     if (socket.canalVozAtual) {

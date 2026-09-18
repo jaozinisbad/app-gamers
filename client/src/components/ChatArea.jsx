@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../api.js';
 
-export default function ChatArea({ canal, statusConexao, socket, token, nomeUsuario }) {
+export default function ChatArea({ canal, statusConexao, socket, token, nomeUsuario, meuUsuarioId, podeApagarMensagens }) {
   const [mensagens, setMensagens] = useState([]);
   const [texto, setTexto] = useState('');
   const [arquivo, setArquivo] = useState(null);
@@ -27,7 +27,7 @@ export default function ChatArea({ canal, statusConexao, socket, token, nomeUsua
     };
   }, [canal.id, canal.tipo, socket, token]);
 
-  // Escuta novas mensagens em tempo real.
+  // Escuta novas mensagens e apagamentos em tempo real.
   useEffect(() => {
     if (!socket) return;
     function aoReceber({ canalId, mensagem }) {
@@ -35,8 +35,17 @@ export default function ChatArea({ canal, statusConexao, socket, token, nomeUsua
         setMensagens((atual) => [...atual, mensagem]);
       }
     }
+    function aoApagar({ canalId, mensagemId }) {
+      if (canalId === canal.id) {
+        setMensagens((atual) => atual.filter((m) => m.id !== mensagemId));
+      }
+    }
     socket.on('nova-mensagem', aoReceber);
-    return () => socket.off('nova-mensagem', aoReceber);
+    socket.on('mensagem-apagada', aoApagar);
+    return () => {
+      socket.off('nova-mensagem', aoReceber);
+      socket.off('mensagem-apagada', aoApagar);
+    };
   }, [socket, canal.id]);
 
   useEffect(() => {
@@ -68,6 +77,10 @@ export default function ChatArea({ canal, statusConexao, socket, token, nomeUsua
     }
   }
 
+  function apagarMensagem(mensagemId) {
+    socket?.emit('apagar-mensagem', { canalId: canal.id, mensagemId });
+  }
+
   const conectado = statusConexao === 'conectado ao servidor';
 
   return (
@@ -84,22 +97,32 @@ export default function ChatArea({ canal, statusConexao, socket, token, nomeUsua
               Servidor: {statusConexao}
             </div>
             <div className="chat-mensagens">
-              {mensagens.map((m) => (
-                <div key={m.id} className="chat-mensagem">
-                  <span className="autor">{m.autor}</span>
-                  <span className="hora">{new Date(m.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
-                  <span className="conteudo">{m.conteudo}</span>
-                  {m.anexo_url && (
-                    <div className="chat-anexo">
-                      {m.anexo_tipo?.startsWith('image/') ? (
-                        <img src={m.anexo_url} alt={m.anexo_nome || 'Imagem enviada'} />
-                      ) : (
-                        <a href={m.anexo_url} download={m.anexo_nome || 'arquivo'}>{m.anexo_nome || 'Baixar arquivo'}</a>
+              {mensagens.map((m) => {
+                const podeApagar = podeApagarMensagens || m.usuario_id === meuUsuarioId;
+                return (
+                  <div key={m.id} className="chat-mensagem">
+                    <div className="chat-mensagem__cabecalho">
+                      <span className="autor">{m.autor}</span>
+                      <span className="hora">{new Date(m.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+                      {podeApagar && (
+                        <button type="button" className="chat-mensagem__apagar" title="Apagar mensagem" onClick={() => apagarMensagem(m.id)}>
+                          🗑️
+                        </button>
                       )}
                     </div>
-                  )}
-                </div>
-              ))}
+                    {m.conteudo && <span className="conteudo">{m.conteudo}</span>}
+                    {m.anexo_url && (
+                      <div className="chat-anexo">
+                        {m.anexo_tipo?.startsWith('image/') ? (
+                          <img src={m.anexo_url} alt={m.anexo_nome || 'Imagem enviada'} />
+                        ) : (
+                          <a href={m.anexo_url} download={m.anexo_nome || 'arquivo'}>{m.anexo_nome || 'Baixar arquivo'}</a>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
               <div ref={fimDaLista} />
             </div>
           </div>
