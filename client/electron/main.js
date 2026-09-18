@@ -132,6 +132,18 @@ function configurarCapturaPorProcesso() {
   });
 }
 
+function configurarPermissoesDeMidia() {
+  const permissoesDeMidia = new Set(['media', 'microphone', 'camera']);
+
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(permissoesDeMidia.has(permission));
+  });
+
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+    return permissoesDeMidia.has(permission);
+  });
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1100,
@@ -171,6 +183,7 @@ function configurarAtualizacaoAutomatica(win) {
 }
 
 app.whenReady().then(() => {
+  configurarPermissoesDeMidia();
   configurarCompartilhamentoDeTela();
   configurarCapturaPorProcesso();
   const win = createWindow();
