@@ -39,6 +39,7 @@ export default function ChannelSidebar({
   codigoConvite,
   souDono,
   onExcluirServidor,
+  onSairDoServidor,
   minhasPermissoes = {},
   canais,
   canalAtivoId,
@@ -94,6 +95,20 @@ export default function ChannelSidebar({
             }}
           >
             🗑️
+          </button>
+        )}
+        {!souDono && (
+          <button
+            type="button"
+            className="channel-sidebar__excluir-servidor"
+            title="Sair do servidor"
+            onClick={() => {
+              if (window.confirm(`Sair de "${servidorNome}"? Você pode voltar depois com um convite.`)) {
+                onSairDoServidor();
+              }
+            }}
+          >
+            🚪
           </button>
         )}
       </div>

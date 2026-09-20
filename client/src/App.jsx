@@ -216,6 +216,17 @@ export default function App() {
     });
   }
 
+  async function sairDoServidor(id) {
+    await apiFetch(`/api/servidores/${id}/sair`, sessao.token, { method: 'POST' });
+    setServidores((atual) => {
+      const restantes = atual.filter((s) => s.id !== id);
+      if (servidorAtivoId === id) {
+        setServidorAtivoId(restantes[0]?.id ?? null);
+      }
+      return restantes;
+    });
+  }
+
   async function entrarComCodigo(codigo) {
     const servidor = await apiFetch('/api/servidores/entrar', sessao.token, {
       method: 'POST',
@@ -382,6 +393,7 @@ export default function App() {
             codigoConvite={servidorAtivo.codigo_convite}
             souDono={servidorAtivo.papel === 'dono'}
             onExcluirServidor={() => excluirServidor(servidorAtivo.id)}
+            onSairDoServidor={() => sairDoServidor(servidorAtivo.id)}
             minhasPermissoes={minhasPermissoes}
             canais={canais}
             canalAtivoId={canalAtivo.id}

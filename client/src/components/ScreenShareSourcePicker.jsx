@@ -7,10 +7,13 @@ import React, { useEffect, useState } from 'react';
  */
 export default function ScreenShareSourcePicker({ onSelecionar, onFechar }) {
   const [fontes, setFontes] = useState([]); // [{id, name, thumbnail, tipo}]
-  const [resolucao, setResolucao] = useState('720p');
-  const [fps, setFps] = useState('30');
+  // Fixado em 720p por enquanto — foco é deixar essa resolução impecável
+  // antes de reabrir 1080p como opção.
+  const resolucao = '720p';
+  const [fps, setFps] = useState('60');
   const [selecionada, setSelecionada] = useState(null);
   const [capturarAudioApp, setCapturarAudioApp] = useState(false);
+  const [ignorarAudioDiscord, setIgnorarAudioDiscord] = useState(false);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
 
@@ -46,6 +49,11 @@ export default function ScreenShareSourcePicker({ onSelecionar, onFechar }) {
         // escolhida É um app (janela), não uma tela inteira.
         capturarAudioApp: fonte.tipo === 'janela' && capturarAudioApp,
         tituloJanela: fonte.name,
+        // O inverso: só faz sentido "ignorar o Discord" quando a fonte
+        // é a tela inteira — se já é uma janela específica, o Discord
+        // naturalmente já não está sendo capturado.
+        ignorarProcessoAudio: fonte.tipo === 'tela' && ignorarAudioDiscord,
+        nomeProcessoIgnorado: 'Discord.exe',
       });
     }
   }
@@ -88,14 +96,19 @@ export default function ScreenShareSourcePicker({ onSelecionar, onFechar }) {
               </label>
             )}
 
-            <div className="screen-picker-options">
-              <label>
-                Resolução:
-                <select value={resolucao} onChange={(e) => setResolucao(e.target.value)}>
-                  <option value="720p">720p</option>
-                  <option value="1080p">1080p</option>
-                </select>
+            {fontes.find((f) => f.id === selecionada)?.tipo === 'tela' && (
+              <label className="screen-picker-audio-app">
+                <input
+                  type="checkbox"
+                  checked={ignorarAudioDiscord}
+                  onChange={(e) => setIgnorarAudioDiscord(e.target.checked)}
+                />
+                🔇 Ignorar o Discord no áudio (experimental, Windows) — evita o eco de quem
+                está na call ouvir a própria voz de volta
               </label>
+            )}
+
+            <div className="screen-picker-options">
               <label>
                 FPS:
                 <select value={fps} onChange={(e) => setFps(e.target.value)}>

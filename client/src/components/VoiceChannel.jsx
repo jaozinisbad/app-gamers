@@ -10,10 +10,28 @@ const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
 // valores são generosos pensando em hardware bom (RTX) do lado de quem
 // transmite — se a internet de upload de alguém for mais limitada, vale
 // reduzir esses números.
+// 720p60 subiu de 3.5 pra 6 Mbps: jogo com movimento rápido gasta muito
+// mais bits por frame do que uma tela parada, e o valor antigo deixava
+// o encoder "sem munição" nesses momentos — daí o efeito borrado.
 const BITRATE_TELA = {
-  '720p': 3_500_000,
+  '720p': 6_000_000,
   '1080p': 8_000_000,
 };
+
+// Isso aqui é malha P2P (cada espectador é uma RTCPeerConnection própria),
+// não um servidor central — então se eu simplesmente mandar 6 Mbps pra
+// cada espectador, com 3 pessoas assistindo isso já são 18 Mbps de upload
+// simultâneos. A internet de upload de quem compartilha quase nunca aguenta
+// isso, o WebRTC entra em modo de congestionamento pra compensar, e a
+// imagem final fica PIOR do que estava com o valor antigo (mesmo o "alvo"
+// sendo mais alto agora). Por isso: um orçamento TOTAL de banda que é
+// dividido entre quantos estiverem vendo a tela no momento, com um piso
+// mínimo pra não ficar ilegível quando tiver muita gente.
+const BITRATE_TOTAL_TELA = {
+  '720p': 9_000_000,
+  '1080p': 12_000_000,
+};
+const BITRATE_MINIMO_TELA = 2_000_000;
 
 // Bitrate de áudio mais alto que o padrão do Opus (que gira uns 32kbps)
 // — com um microfone bom, vale a pena usar mais banda pra manter a
@@ -64,6 +82,8 @@ const VoiceChannel = forwardRef(function VoiceChannel(
   const [audioMudo, setAudioMudo] = useState(false);
   const [erro, setErro] = useState('');
   const [erroCompartilhamento, setErroCompartilhamento] = useState('');
+  const [telasOcultas, setTelasOcultas] = useState(() => new Set());
+  const [telasMutadas, setTelasMutadas] = useState(() => new Set());
   const [conectando, setConectando] = useState(true);
   const [compartilhandoTela, setCompartilhandoTela] = useState(false);
   const [resolucaoTela, setResolucaoTela] = useState('720p');
@@ -82,6 +102,7 @@ const VoiceChannel = forwardRef(function VoiceChannel(
   const ganhoEntradaRef = useRef(null);
 
   const telaLocalRef = useRef(null);
+  const resolucaoTelaAtualRef = useRef('720p'); // pra saber o alvo de bitrate ao (re)equilibrar entre espectadores
   const pipelineAudioProcessoRef = useRef(null); // { stream, receberChunk, destruir } quando usando audio por app
   const pararOuvinteAudioTelaRef = useRef(null); // funcao pra parar de escutar os chunks vindos do Electron
   const conexoesRef = useRef({}); // socketId -> RTCPeerConnection
@@ -91,6 +112,36 @@ const VoiceChannel = forwardRef(function VoiceChannel(
   const contextoAudioRef = useRef(null); // contexto só dos efeitos sonoros
   const telasComSomRef = useRef(new Set());
   const configuracaoAudioRef = useRef({ volumeEntrada: 100, volumeSaida: 100, microfoneId: '', foneId: '' });
+  const videosRemotosRef = useRef({}); // socketId -> elemento <video> (pra tela cheia)
+
+  // Calcula quanto bitrate CADA espectador deve receber agora, dividindo o
+  // orçamento total pelo número de gente assistindo — em vez de mandar o
+  // mesmo valor alto pra todo mundo e estourar o upload de quem compartilha.
+  function bitratePorEspectador(res) {
+    const numEspectadores = Math.max(1, Object.keys(conexoesRef.current).length);
+    const orcamentoTotal = BITRATE_TOTAL_TELA[res] || BITRATE_TOTAL_TELA['720p'];
+    const teto = BITRATE_TELA[res] || BITRATE_TELA['720p'];
+    return Math.max(BITRATE_MINIMO_TELA, Math.min(teto, orcamentoTotal / numEspectadores));
+  }
+
+  // Reaplica o bitrate em TODAS as conexões que já estão recebendo a tela —
+  // precisa rodar sempre que alguém entra ou sai da call enquanto a tela tá
+  // sendo compartilhada, senão quem já estava assistindo fica preso no
+  // bitrate de antes (calculado pra um número diferente de espectadores).
+  function reaplicarBitrateTela() {
+    const videoTrack = telaLocalRef.current?.getVideoTracks()[0];
+    if (!videoTrack) return;
+    const alvo = bitratePorEspectador(resolucaoTelaAtualRef.current);
+    Object.values(conexoesRef.current).forEach((pc) => {
+      const remetente = pc.getSenders().find((s) => s.track === videoTrack);
+      if (!remetente) return;
+      const parametros = remetente.getParameters();
+      if (!parametros.encodings?.length) parametros.encodings = [{}];
+      parametros.encodings[0].maxBitrate = alvo;
+      parametros.degradationPreference = 'maintain-resolution';
+      remetente.setParameters(parametros).catch(() => {});
+    });
+  }
 
   // Avisa o App sempre que algo que a sidebar precisa mostrar mudar.
   useEffect(() => {
@@ -299,8 +350,39 @@ const VoiceChannel = forwardRef(function VoiceChannel(
       configurarQualidadeDeAudio(pc);
 
       telaLocalRef.current?.getTracks().forEach((track) => {
-        pc.addTrack(track, telaLocalRef.current);
+        const remetente = pc.addTrack(track, telaLocalRef.current);
+        if (track.kind === 'video') {
+          const transceiver = pc.getTransceivers().find((t) => t.sender === remetente);
+          preferirH264(transceiver);
+          const parametros = remetente.getParameters();
+          parametros.encodings = [
+            { maxBitrate: bitratePorEspectador(resolucaoTelaAtualRef.current) },
+          ];
+          parametros.degradationPreference = 'maintain-resolution';
+          remetente.setParameters(parametros).catch(() => {});
+        }
       });
+      // O áudio "só desse app" (captura por processo) NÃO faz parte do
+      // stream de telaLocalRef — ele vem de um pipeline (Web Audio)
+      // completamente separado. Por isso o forEach acima nunca pega ele:
+      // quem já estava na call quando o compartilhamento começou recebe
+      // esse áudio (é adicionado manualmente em iniciarCompartilhamento),
+      // mas quem entra na call DEPOIS ficava sem, porque essa conexão
+      // nova só via os tracks de telaLocalRef. Corrigido adicionando esse
+      // áudio aqui também, se tiver um em andamento.
+      const audioTrackProcesso = pipelineAudioProcessoRef.current?.stream.getAudioTracks()[0];
+      if (audioTrackProcesso) {
+        const remetenteAudio = pc.addTrack(audioTrackProcesso, telaLocalRef.current);
+        const parametrosAudio = remetenteAudio.getParameters();
+        parametrosAudio.encodings = (parametrosAudio.encodings?.length ? parametrosAudio.encodings : [{}]).map(
+          (encoding) => ({ ...encoding, maxBitrate: BITRATE_AUDIO_TELA }),
+        );
+        remetenteAudio.setParameters(parametrosAudio).catch(() => {});
+      }
+      // Chegou mais um espectador: reequilibra o bitrate de quem já estava
+      // vendo, já que agora a banda de upload precisa ser dividida entre
+      // mais gente.
+      if (telaLocalRef.current) queueMicrotask(() => reaplicarBitrateTela());
 
       pc.onicecandidate = (e) => {
         if (e.candidate) {
@@ -364,6 +446,9 @@ const VoiceChannel = forwardRef(function VoiceChannel(
         delete copia[socketId];
         return copia;
       });
+      // Alguém saiu: sobra mais banda de upload pra dividir entre quem
+      // ficou vendo a tela, então reequilibra pra cima.
+      if (telaLocalRef.current) reaplicarBitrateTela();
     }
 
     function removerTelaRemota(socketId) {
@@ -456,6 +541,13 @@ const VoiceChannel = forwardRef(function VoiceChannel(
     socket.on('peer-saiu', ({ socketId }) => {
       tocarEfeito('sair');
       telasComSomRef.current.delete(socketId);
+      delete videosRemotosRef.current[socketId];
+      setTelasOcultas((atual) => {
+        if (!atual.has(socketId)) return atual;
+        const copia = new Set(atual);
+        copia.delete(socketId);
+        return copia;
+      });
       fecharConexao(socketId);
       setParticipantes((atual) => atual.filter((p) => p.socketId !== socketId));
     });
@@ -548,8 +640,12 @@ const VoiceChannel = forwardRef(function VoiceChannel(
 
       // Se o usuário marcou "capturar só o áudio desse app", não pedimos
       // o loopback do sistema inteiro no getDisplayMedia — em vez disso,
-      // usamos a captura por processo específico do Electron.
+      // usamos a captura por processo específico do Electron. O mesmo
+      // vale pra "ignorar um app no áudio" (ex: Discord) — nos dois
+      // casos quem manda o áudio de verdade é o pipeline por processo,
+      // não o getDisplayMedia.
       const usarAudioPorApp = !!config?.capturarAudioApp && !!config?.tituloJanela;
+      const usarAudioIgnorandoApp = !!config?.ignorarProcessoAudio;
 
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: {
@@ -557,17 +653,22 @@ const VoiceChannel = forwardRef(function VoiceChannel(
           height: { ideal: dimensoes.altura, max: dimensoes.altura },
           frameRate: { ideal: fps, max: fps },
         },
-        audio: !usarAudioPorApp,
+        audio: !usarAudioPorApp && !usarAudioIgnorandoApp,
       });
 
       const videoTrack = stream.getVideoTracks()[0];
       let audioTrackTela = stream.getAudioTracks()[0]; // pode não vir, dependendo do sistema
-      // "detail" preserva nitidez de texto/interface melhor que "motion"
-      // pra compartilhamento de tela cheia.
-      videoTrack.contentHint = 'detail';
+      // "motion" faz o codec priorizar fluidez durante movimento rápido
+      // (jogo em ação) em vez de nitidez de imagem parada — era "detail"
+      // antes, o que é ótimo pra compartilhar texto/planilha parada, mas
+      // é exatamente o motivo da imagem borrar quando o jogo se move
+      // rápido: o encoder estava gastando bits tentando preservar
+      // detalhe estático em vez de acompanhar o movimento.
+      videoTrack.contentHint = 'motion';
       videoTrack.onended = () => pararCompartilhamento();
 
       telaLocalRef.current = stream;
+      resolucaoTelaAtualRef.current = res;
       setCompartilhandoTela(true);
       tocarEfeito('transmitir');
 
@@ -586,6 +687,20 @@ const VoiceChannel = forwardRef(function VoiceChannel(
           );
           audioTrackTela = null;
         }
+      } else if (usarAudioIgnorandoApp) {
+        const nomeProcesso = config?.nomeProcessoIgnorado || 'Discord.exe';
+        const resultado = await window.electronAPI?.iniciarCapturaExcluindoProcesso(nomeProcesso);
+        if (resultado?.sucesso) {
+          const pipeline = criarPipelineDeAudioPorProcesso();
+          pipelineAudioProcessoRef.current = pipeline;
+          pararOuvinteAudioTelaRef.current = window.electronAPI.onAudioTelaChunk(pipeline.receberChunk);
+          audioTrackTela = pipeline.stream.getAudioTracks()[0];
+        } else {
+          setErroCompartilhamento(
+            `Não consegui ignorar o ${nomeProcesso} no áudio (${resultado?.mensagem || 'motivo desconhecido'}). Compartilhando com o áudio do sistema inteiro, ${nomeProcesso} incluído.`,
+          );
+          audioTrackTela = null;
+        }
       }
 
       const alturaNativa = videoTrack.getSettings().height || dimensoes.altura;
@@ -600,11 +715,14 @@ const VoiceChannel = forwardRef(function VoiceChannel(
         const parametros = remetente.getParameters();
         parametros.encodings = [
           {
-            maxBitrate: BITRATE_TELA[res] || BITRATE_TELA['720p'],
+            maxBitrate: bitratePorEspectador(res),
             maxFramerate: fps,
             scaleResolutionDownBy: escala,
           },
         ];
+        // Se a conexão apertar, prefere cair o FPS a perder nitidez de
+        // resolução — pra manter a imagem legível mesmo com engasgo.
+        parametros.degradationPreference = 'maintain-resolution';
         remetente.setParameters(parametros).catch(() => {});
 
         // Áudio do sistema (jogo, música, etc.) — vai como uma segunda
@@ -667,12 +785,18 @@ const VoiceChannel = forwardRef(function VoiceChannel(
 
   async function abrirTelaCheia(video) {
     try {
+      if (!video) {
+        throw new Error('Elemento de vídeo não encontrado.');
+      }
       if (document.fullscreenElement) {
         await document.exitFullscreen();
       } else {
         await video.requestFullscreen();
       }
     } catch (err) {
+      // Antes esse erro nunca aparecia (a busca pelo vídeo acontecia fora
+      // do try/catch), então uma falha aqui parecia "o botão não faz nada".
+      console.error('Falha ao abrir tela cheia:', err);
       setErroCompartilhamento('Não foi possível abrir a transmissão em tela cheia.');
     }
   }
@@ -724,7 +848,42 @@ const VoiceChannel = forwardRef(function VoiceChannel(
     aplicarConfiguracao,
   }));
 
+  function alternarTelaOculta(socketId) {
+    setTelasOcultas((atual) => {
+      const copia = new Set(atual);
+      if (copia.has(socketId)) {
+        copia.delete(socketId);
+      } else {
+        copia.add(socketId);
+      }
+      return copia;
+    });
+  }
+
+  // Muda só o áudio, sem parar de ver a tela (diferente de "parar de
+  // assistir", que esconde tudo). Cada tela compartilhada tem seu áudio
+  // próprio — isso não mexe no seu microfone nem no áudio de mais
+  // ninguém na call.
+  function alternarMuteTela(socketId) {
+    setTelasMutadas((atual) => {
+      const copia = new Set(atual);
+      if (copia.has(socketId)) {
+        copia.delete(socketId);
+      } else {
+        copia.add(socketId);
+      }
+      return copia;
+    });
+  }
+
   const telasRemotasLista = Object.entries(telasRemotas);
+  // "Parar de assistir" agora tira a tela do grid de vez, em vez de
+  // deixar uma caixa grande no lugar dela só com um botão — daí quem
+  // tem várias telas abertas não fica com um monte de espaço ocupado
+  // à toa. Quem quiser voltar a assistir usa a lista compacta abaixo
+  // do grid.
+  const telasVisiveis = telasRemotasLista.filter(([socketId]) => !telasOcultas.has(socketId));
+  const telasEscondidas = telasRemotasLista.filter(([socketId]) => telasOcultas.has(socketId));
   const temTelaPraMostrar = compartilhandoTela || telasRemotasLista.length > 0;
 
   if (!temTelaPraMostrar) return null;
@@ -747,30 +906,67 @@ const VoiceChannel = forwardRef(function VoiceChannel(
               <div className="tela-tile__label">Sua tela (você)</div>
             </div>
           )}
-          {telasRemotasLista.map(([socketId, stream]) => {
+          {telasVisiveis.map(([socketId, stream]) => {
             const participante = participantes.find((p) => p.socketId === socketId);
+            const mutada = telasMutadas.has(socketId);
             return (
               <div className="tela-tile" key={socketId}>
                 <video
                   autoPlay
                   playsInline
+                  muted={mutada}
                   ref={(el) => {
+                    videosRemotosRef.current[socketId] = el;
                     if (el) el.srcObject = stream;
                   }}
                 />
                 <div className="tela-tile__label">{participante?.nome || 'Alguém'}</div>
                 <button
                   className="tela-tile__fullscreen"
-                  onClick={(e) => abrirTelaCheia(e.currentTarget.parentElement.querySelector('video'))}
+                  onClick={() => abrirTelaCheia(videosRemotosRef.current[socketId])}
                   title={`Abrir transmissão de ${participante?.nome || 'Alguém'} em tela cheia`}
                   type="button"
                 >
                   Tela cheia
                 </button>
+                <button
+                  className="tela-tile__mutar"
+                  onClick={() => alternarMuteTela(socketId)}
+                  title={mutada ? 'Ativar o áudio dessa tela' : 'Mutar o áudio dessa tela'}
+                  type="button"
+                >
+                  {mutada ? '🔇' : '🔊'}
+                </button>
+                <button
+                  className="tela-tile__ocultar"
+                  onClick={() => alternarTelaOculta(socketId)}
+                  title="Parar de assistir essa tela (sem sair da call)"
+                  type="button"
+                >
+                  🙈
+                </button>
               </div>
             );
           })}
         </div>
+        {telasEscondidas.length > 0 && (
+          <div className="telas-ocultas-lista">
+            {telasEscondidas.map(([socketId]) => {
+              const participante = participantes.find((p) => p.socketId === socketId);
+              return (
+                <button
+                  key={socketId}
+                  type="button"
+                  className="tela-oculta-chip"
+                  onClick={() => alternarTelaOculta(socketId)}
+                  title="Voltar a assistir essa tela"
+                >
+                  👁️ Voltar a assistir {participante?.nome || 'Alguém'}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

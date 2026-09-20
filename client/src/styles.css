@@ -1559,7 +1559,7 @@ html, body, #root {
 .tela-tile__fullscreen {
   position: absolute;
   top: 8px;
-  right: 8px;
+  right: 80px;
   border: 0;
   border-radius: 4px;
   padding: 6px 8px;
@@ -1570,6 +1570,67 @@ html, body, #root {
 
 .tela-tile__fullscreen:hover {
   background: rgba(0, 0, 0, 0.9);
+}
+
+.tela-tile__mutar {
+  position: absolute;
+  top: 8px;
+  right: 44px;
+  border: 0;
+  border-radius: 4px;
+  padding: 6px 8px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.7);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.tela-tile__mutar:hover {
+  background: rgba(0, 0, 0, 0.9);
+}
+
+.tela-tile__ocultar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  border: 0;
+  border-radius: 4px;
+  padding: 6px 8px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.7);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.tela-tile__ocultar:hover {
+  background: rgba(0, 0, 0, 0.9);
+}
+
+/* Chips compactos de telas que a pessoa parou de assistir — em vez de
+   deixar uma caixa grande ocupando espaço no grid, fica só essa lista
+   pequena embaixo, pra quem quiser voltar a assistir depois. */
+.telas-ocultas-lista {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 8px 8px;
+}
+
+.tela-oculta-chip {
+  border: 1px solid #3a3d44;
+  border-radius: 999px;
+  padding: 6px 12px;
+  color: #b5bac1;
+  background: #1a1c22;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.tela-oculta-chip:hover {
+  background: #23262d;
+  color: #fff;
 }
 
 /* Tela de amigos */

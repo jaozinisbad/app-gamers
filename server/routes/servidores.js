@@ -166,6 +166,28 @@ router.delete('/servidores/:id', (req, res) => {
   res.status(204).end();
 });
 
+// Sai de um servidor por conta própria. O dono não pode sair — ele precisa
+// excluir o servidor (ou, no futuro, transferir a posse pra outra pessoa).
+router.post('/servidores/:id/sair', (req, res) => {
+  const servidorId = Number(req.params.id);
+
+  const membro = db
+    .prepare('SELECT papel FROM membros_servidor WHERE servidor_id = ? AND usuario_id = ?')
+    .get(servidorId, req.usuario.id);
+
+  if (!membro) {
+    return res.status(404).json({ erro: 'Você não é membro deste servidor.' });
+  }
+  if (membro.papel === 'dono') {
+    return res.status(400).json({ erro: 'Quem criou o servidor não pode sair dele — só excluir.' });
+  }
+
+  db.prepare('DELETE FROM membros_cargos WHERE servidor_id = ? AND usuario_id = ?').run(servidorId, req.usuario.id);
+  db.prepare('DELETE FROM membros_servidor WHERE servidor_id = ? AND usuario_id = ?').run(servidorId, req.usuario.id);
+
+  res.status(204).end();
+});
+
 router.patch('/servidores/:id', (req, res) => {
   const servidorId = Number(req.params.id);
   if (!temPermissao(servidorId, req.usuario.id, 'gerenciar_servidor')) {

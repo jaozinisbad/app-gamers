@@ -62,32 +62,75 @@ function configurarCompartilhamentoDeTela() {
   });
 }
 
-// Descobre o PID (identificador do processo) de uma janela pelo título
-// dela, usando o PowerShell — assim não precisamos de mais nenhuma
-// dependência nativa só pra essa busca.
-function obterPidPorTitulo(tituloJanela) {
+// Roda um script PowerShell e devolve o stdout. Usa -EncodedCommand
+// (o script inteiro em Base64) em vez de -Command "..." — o jeito
+// -Command exige colocar o script inteiro dentro de aspas duplas na
+// linha de comando do Windows, e se o PRÓPRIO script também usa aspas
+// duplas por dentro (como o filtro do WMI abaixo), elas "fecham" a
+// aspa de fora sem querer e o comando quebra silenciosamente (dá erro
+// sem exceção nenhuma no lado do Node, só volta vazio). -EncodedCommand
+// evita esse problema de vez, porque não passa nenhuma aspa pela linha
+// de comando.
+function executarPowerShell(script) {
   return new Promise((resolve) => {
-    const comandoPs =
-      "Get-Process | Where-Object { $_.MainWindowTitle -ne '' } | Select-Object Id, MainWindowTitle | ConvertTo-Json -Compress";
+    const base64 = Buffer.from(script, 'utf16le').toString('base64');
     exec(
-      `powershell -NoProfile -Command "${comandoPs}"`,
+      `powershell -NoProfile -EncodedCommand ${base64}`,
       { windowsHide: true, timeout: 5000 },
       (err, stdout) => {
         if (err) {
           resolve(null);
           return;
         }
-        try {
-          let lista = JSON.parse(stdout || '[]');
-          if (!Array.isArray(lista)) lista = [lista];
-          const encontrado = lista.find((p) => p.MainWindowTitle === tituloJanela);
-          resolve(encontrado ? encontrado.Id : null);
-        } catch (e) {
-          resolve(null);
-        }
+        resolve(stdout);
       },
     );
   });
+}
+
+// Descobre o PID (identificador do processo) de uma janela pelo título
+// dela, usando o PowerShell — assim não precisamos de mais nenhuma
+// dependência nativa só pra essa busca.
+async function obterPidPorTitulo(tituloJanela) {
+  const stdout = await executarPowerShell(
+    "Get-Process | Where-Object { $_.MainWindowTitle -ne '' } | Select-Object Id, MainWindowTitle | ConvertTo-Json -Compress",
+  );
+  if (!stdout) return null;
+  try {
+    let lista = JSON.parse(stdout || '[]');
+    if (!Array.isArray(lista)) lista = [lista];
+    const encontrado = lista.find((p) => p.MainWindowTitle === tituloJanela);
+    return encontrado ? encontrado.Id : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Descobre o PID "raiz" de um programa pelo nome do executável (ex:
+// "Discord.exe"), em vez de pelo título da janela. Isso importa porque
+// programas como o Discord costumam ficar minimizados na bandeja do
+// sistema sem nenhuma janela visível — nesse estado eles não têm
+// MainWindowTitle nenhum, então obterPidPorTitulo() nunca os acharia.
+// Só o nome do processo continua disponível o tempo todo. Como o
+// Discord roda vários processos com o mesmo nome (é um app Electron,
+// igual o nosso), pegamos o processo "raiz" — aquele cujo pai NÃO é
+// outro processo do mesmo nome — pra que o modo "excluir árvore de
+// processos" do Windows pegue todos os processos filhos dele também.
+async function obterPidRaizPorNomeDeProcesso(nomeExe) {
+  const stdout = await executarPowerShell(
+    `Get-CimInstance Win32_Process -Filter "Name='${nomeExe}'" | Select-Object ProcessId, ParentProcessId | ConvertTo-Json -Compress`,
+  );
+  if (!stdout) return null;
+  try {
+    let lista = JSON.parse(stdout || '[]');
+    if (!Array.isArray(lista)) lista = [lista];
+    if (!lista.length) return null;
+    const pids = new Set(lista.map((p) => p.ProcessId));
+    const raiz = lista.find((p) => !pids.has(p.ParentProcessId)) || lista[0];
+    return raiz.ProcessId;
+  } catch (e) {
+    return null;
+  }
 }
 
 // Captura o áudio de UM app específico (ex: só o jogo, ignorando
@@ -132,8 +175,55 @@ function configurarCapturaPorProcesso() {
   });
 }
 
+// Modo inverso do de cima: em vez de capturar SÓ um app, captura o
+// áudio do sistema INTEIRO exceto um app específico. Serve pro caso de
+// "call no Discord, mas compartilhando a tela toda pelo App Gamers" —
+// sem isso, quem compartilha a tela toda manda o áudio do Discord (as
+// vozes de todo mundo) junto, e cada espectador ouve a própria voz de
+// volta com delay (eco), porque ela sai pela caixa de som de quem
+// compartilha e volta pela captura de tela.
+// A mesma biblioteca (loopback-capture) já suporta isso: chamando
+// start(pid, false, ...) em vez de start(pid, true, ...), no Windows
+// isso ativa o modo "excluir árvore de processos" da WASAPI, em vez de
+// "incluir" — captura tudo, menos aquele processo (e os filhos dele).
+function configurarCapturaExcluindoProcesso() {
+  ipcMain.handle('iniciar-captura-excluindo-processo', async (event, nomeProcesso) => {
+    if (!loopback) {
+      return { sucesso: false, mensagem: 'Esse recurso só funciona no Windows 10 (versão 2004) ou mais novo.' };
+    }
+
+    try {
+      const pid = await obterPidRaizPorNomeDeProcesso(nomeProcesso);
+      if (!pid) {
+        return {
+          sucesso: false,
+          mensagem: `Não encontrei o ${nomeProcesso} rodando. Ele precisa estar aberto (pode estar minimizado).`,
+        };
+      }
+
+      if (capturaProcessoAtual) {
+        capturaProcessoAtual.stop();
+        capturaProcessoAtual = null;
+      }
+
+      capturaProcessoAtual = new loopback.LoopbackCapture();
+      // "false" aqui é o que liga o modo excluir, não "incluir árvore".
+      capturaProcessoAtual.start(pid, false, (chunk) => {
+        event.sender.send('audio-tela-chunk', chunk);
+      });
+
+      return { sucesso: true };
+    } catch (err) {
+      return { sucesso: false, mensagem: `Erro ao iniciar a captura: ${err.message}` };
+    }
+  });
+}
+
 function configurarPermissoesDeMidia() {
-  const permissoesDeMidia = new Set(['media', 'microphone', 'camera']);
+  // 'fullscreen' precisa estar aqui — sem ela, o Electron nega o pedido de
+  // tela cheia (video.requestFullscreen()) em silêncio, sem erro nenhum,
+  // o que fazia o botão "Tela cheia" parecer simplesmente não funcionar.
+  const permissoesDeMidia = new Set(['media', 'microphone', 'camera', 'fullscreen']);
 
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(permissoesDeMidia.has(permission));
@@ -186,6 +276,7 @@ app.whenReady().then(() => {
   configurarPermissoesDeMidia();
   configurarCompartilhamentoDeTela();
   configurarCapturaPorProcesso();
+  configurarCapturaExcluindoProcesso();
   const win = createWindow();
   configurarAtualizacaoAutomatica(win);
 });
