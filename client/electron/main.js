@@ -133,7 +133,10 @@ function configurarCapturaPorProcesso() {
 }
 
 function configurarPermissoesDeMidia() {
-  const permissoesDeMidia = new Set(['media', 'microphone', 'camera']);
+  // 'fullscreen' precisa estar aqui — sem ela, o Electron nega o pedido de
+  // tela cheia (video.requestFullscreen()) em silêncio, sem erro nenhum,
+  // o que fazia o botão "Tela cheia" parecer simplesmente não funcionar.
+  const permissoesDeMidia = new Set(['media', 'microphone', 'camera', 'fullscreen']);
 
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(permissoesDeMidia.has(permission));

@@ -7,8 +7,10 @@ import React, { useEffect, useState } from 'react';
  */
 export default function ScreenShareSourcePicker({ onSelecionar, onFechar }) {
   const [fontes, setFontes] = useState([]); // [{id, name, thumbnail, tipo}]
-  const [resolucao, setResolucao] = useState('720p');
-  const [fps, setFps] = useState('30');
+  // Fixado em 720p por enquanto — foco é deixar essa resolução impecável
+  // antes de reabrir 1080p como opção.
+  const resolucao = '720p';
+  const [fps, setFps] = useState('60');
   const [selecionada, setSelecionada] = useState(null);
   const [capturarAudioApp, setCapturarAudioApp] = useState(false);
   const [carregando, setCarregando] = useState(true);
@@ -89,13 +91,6 @@ export default function ScreenShareSourcePicker({ onSelecionar, onFechar }) {
             )}
 
             <div className="screen-picker-options">
-              <label>
-                Resolução:
-                <select value={resolucao} onChange={(e) => setResolucao(e.target.value)}>
-                  <option value="720p">720p</option>
-                  <option value="1080p">1080p</option>
-                </select>
-              </label>
               <label>
                 FPS:
                 <select value={fps} onChange={(e) => setFps(e.target.value)}>

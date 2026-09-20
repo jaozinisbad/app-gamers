@@ -64,6 +64,7 @@ const VoiceChannel = forwardRef(function VoiceChannel(
   const [audioMudo, setAudioMudo] = useState(false);
   const [erro, setErro] = useState('');
   const [erroCompartilhamento, setErroCompartilhamento] = useState('');
+  const [telasOcultas, setTelasOcultas] = useState(() => new Set());
   const [conectando, setConectando] = useState(true);
   const [compartilhandoTela, setCompartilhandoTela] = useState(false);
   const [resolucaoTela, setResolucaoTela] = useState('720p');
@@ -91,6 +92,7 @@ const VoiceChannel = forwardRef(function VoiceChannel(
   const contextoAudioRef = useRef(null); // contexto só dos efeitos sonoros
   const telasComSomRef = useRef(new Set());
   const configuracaoAudioRef = useRef({ volumeEntrada: 100, volumeSaida: 100, microfoneId: '', foneId: '' });
+  const videosRemotosRef = useRef({}); // socketId -> elemento <video> (pra tela cheia)
 
   // Avisa o App sempre que algo que a sidebar precisa mostrar mudar.
   useEffect(() => {
@@ -456,6 +458,13 @@ const VoiceChannel = forwardRef(function VoiceChannel(
     socket.on('peer-saiu', ({ socketId }) => {
       tocarEfeito('sair');
       telasComSomRef.current.delete(socketId);
+      delete videosRemotosRef.current[socketId];
+      setTelasOcultas((atual) => {
+        if (!atual.has(socketId)) return atual;
+        const copia = new Set(atual);
+        copia.delete(socketId);
+        return copia;
+      });
       fecharConexao(socketId);
       setParticipantes((atual) => atual.filter((p) => p.socketId !== socketId));
     });
@@ -667,12 +676,18 @@ const VoiceChannel = forwardRef(function VoiceChannel(
 
   async function abrirTelaCheia(video) {
     try {
+      if (!video) {
+        throw new Error('Elemento de vídeo não encontrado.');
+      }
       if (document.fullscreenElement) {
         await document.exitFullscreen();
       } else {
         await video.requestFullscreen();
       }
     } catch (err) {
+      // Antes esse erro nunca aparecia (a busca pelo vídeo acontecia fora
+      // do try/catch), então uma falha aqui parecia "o botão não faz nada".
+      console.error('Falha ao abrir tela cheia:', err);
       setErroCompartilhamento('Não foi possível abrir a transmissão em tela cheia.');
     }
   }
@@ -724,6 +739,18 @@ const VoiceChannel = forwardRef(function VoiceChannel(
     aplicarConfiguracao,
   }));
 
+  function alternarTelaOculta(socketId) {
+    setTelasOcultas((atual) => {
+      const copia = new Set(atual);
+      if (copia.has(socketId)) {
+        copia.delete(socketId);
+      } else {
+        copia.add(socketId);
+      }
+      return copia;
+    });
+  }
+
   const telasRemotasLista = Object.entries(telasRemotas);
   const temTelaPraMostrar = compartilhandoTela || telasRemotasLista.length > 0;
 
@@ -749,23 +776,44 @@ const VoiceChannel = forwardRef(function VoiceChannel(
           )}
           {telasRemotasLista.map(([socketId, stream]) => {
             const participante = participantes.find((p) => p.socketId === socketId);
+            const oculta = telasOcultas.has(socketId);
             return (
-              <div className="tela-tile" key={socketId}>
-                <video
-                  autoPlay
-                  playsInline
-                  ref={(el) => {
-                    if (el) el.srcObject = stream;
-                  }}
-                />
+              <div className={`tela-tile${oculta ? ' tela-tile--oculta' : ''}`} key={socketId}>
+                {oculta ? (
+                  <div className="tela-tile__placeholder">
+                    <span>🙈 Você parou de assistir a tela de {participante?.nome || 'Alguém'}</span>
+                    <button type="button" className="botao-primario" onClick={() => alternarTelaOculta(socketId)}>
+                      Voltar a assistir
+                    </button>
+                  </div>
+                ) : (
+                  <video
+                    autoPlay
+                    playsInline
+                    ref={(el) => {
+                      videosRemotosRef.current[socketId] = el;
+                      if (el) el.srcObject = stream;
+                    }}
+                  />
+                )}
                 <div className="tela-tile__label">{participante?.nome || 'Alguém'}</div>
+                {!oculta && (
+                  <button
+                    className="tela-tile__fullscreen"
+                    onClick={() => abrirTelaCheia(videosRemotosRef.current[socketId])}
+                    title={`Abrir transmissão de ${participante?.nome || 'Alguém'} em tela cheia`}
+                    type="button"
+                  >
+                    Tela cheia
+                  </button>
+                )}
                 <button
-                  className="tela-tile__fullscreen"
-                  onClick={(e) => abrirTelaCheia(e.currentTarget.parentElement.querySelector('video'))}
-                  title={`Abrir transmissão de ${participante?.nome || 'Alguém'} em tela cheia`}
+                  className="tela-tile__ocultar"
+                  onClick={() => alternarTelaOculta(socketId)}
+                  title={oculta ? 'Voltar a assistir essa tela' : 'Parar de assistir essa tela (sem sair da call)'}
                   type="button"
                 >
-                  Tela cheia
+                  {oculta ? '👁️' : '🙈'}
                 </button>
               </div>
             );
