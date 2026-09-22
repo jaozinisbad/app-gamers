@@ -22,17 +22,17 @@ export default function MemberSidebar({ membros = [] }) {
             {nomeGrupo} — {grupo.membros.length}
           </div>
           {grupo.membros.map((membro) => (
-            <div className="member-item" key={membro.id}>
+            <div className={`member-item${membro.online ? '' : ' member-item--offline'}`} key={membro.id}>
               <div className="member-item__avatar">
                 <Avatar nome={membro.nome} avatarUrl={membro.avatar_url} avatarCor={membro.avatar_cor || '#5865f2'} tamanho="sm" />
-                <span className="member-item__status" />
+                <span className={`member-item__status ${membro.online ? 'online' : 'offline'}`} />
               </div>
               <div className="member-item__details">
                 <div className="member-item__name" style={{ color: grupo.cor === '#949ba4' ? '#dbdee1' : grupo.cor }}>
                   {membro.nome}
                   {membro.papel === 'dono' && <span className="member-item__owner">★</span>}
                 </div>
-                <div className="member-item__activity">{membro.status || 'Disponível'}</div>
+                <div className="member-item__activity">{membro.online ? (membro.status || 'Disponível') : 'Offline'}</div>
               </div>
             </div>
           ))}

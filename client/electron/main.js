@@ -3,6 +3,8 @@ const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const { exec } = require('child_process');
 
+app.setName('Astralis');
+
 // loopback-capture só funciona no Windows — em qualquer outro sistema
 // (dev no Mac/Linux, por exemplo) isso falha ao importar, então
 // carregamos com cuidado pra não derrubar o app inteiro por causa disso.
@@ -177,7 +179,7 @@ function configurarCapturaPorProcesso() {
 
 // Modo inverso do de cima: em vez de capturar SÓ um app, captura o
 // áudio do sistema INTEIRO exceto um app específico. Serve pro caso de
-// "call no Discord, mas compartilhando a tela toda pelo App Gamers" —
+// "call no Discord, mas compartilhando a tela toda pelo Astralis" —
 // sem isso, quem compartilha a tela toda manda o áudio do Discord (as
 // vozes de todo mundo) junto, e cada espectador ouve a própria voz de
 // volta com delay (eco), porque ela sai pela caixa de som de quem

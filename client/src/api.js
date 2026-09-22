@@ -1,5 +1,7 @@
 const URL_PUBLICA = 'https://app-gamers-server.onrender.com';
-export const SERVER_URL = import.meta.env.VITE_SERVER_URL || (import.meta.env.DEV ? 'http://localhost:3001' : URL_PUBLICA);
+// A prévia local também usa a API publicada por padrão. Para desenvolver com
+// um backend local, defina VITE_SERVER_URL=http://localhost:3001.
+export const SERVER_URL = import.meta.env.VITE_SERVER_URL || URL_PUBLICA;
 
 export async function apiFetch(caminho, token, opcoes = {}) {
   const resp = await fetch(`${SERVER_URL}${caminho}`, {

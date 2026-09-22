@@ -120,9 +120,14 @@ export default function App() {
     }
     function offline({ usuarioId }) {
       setAmigos((atual) => atual.map((a) => (a.id === usuarioId ? { ...a, online: false } : a)));
+      setMembrosServidor((atual) => atual.map((m) => (m.id === usuarioId ? { ...m, online: false } : m)));
+    }
+    function membroOnline({ usuarioId }) {
+      setMembrosServidor((atual) => atual.map((m) => (m.id === usuarioId ? { ...m, online: true } : m)));
     }
     socket.on('amigo-online', online);
     socket.on('amigo-offline', offline);
+    socket.on('amigo-online', membroOnline);
 
     function aoAtualizarPresencaVoz({ canalId, participantes }) {
       setPresencaVoz((atual) => ({ ...atual, [canalId]: participantes }));
@@ -137,6 +142,7 @@ export default function App() {
     return () => {
       socket.off('amigo-online', online);
       socket.off('amigo-offline', offline);
+      socket.off('amigo-online', membroOnline);
       socket.off('presenca-voz-canal', aoAtualizarPresencaVoz);
       socket.off('voce-foi-expulso-da-call', aoSerExpulsoDaCall);
     };
@@ -335,12 +341,7 @@ export default function App() {
   }
 
   if (!sessao) {
-    return (
-      <>
-        <LoginScreen onAutenticado={autenticar} />
-        <div className="versao-watermark">v{packageJson.version}</div>
-      </>
-    );
+    return <LoginScreen onAutenticado={autenticar} />;
   }
 
   const servidorAtivo = servidores.find((s) => s.id === servidorAtivoId);
@@ -426,12 +427,18 @@ export default function App() {
       )}
 
       {view === 'servidor' && (!servidorAtivo || !canalAtivo) && (
-        <div className="content">
-          <div className="content__body">
-            <p style={{ color: '#949ba4' }}>
-              Você ainda não faz parte de nenhum servidor. Clique no "+" na barra à
-              esquerda para criar um ou entrar com um código de convite.
-            </p>
+        <div className="content server-empty-screen">
+          <div className="content__body server-empty-screen__body">
+            <div className="server-empty-card">
+              <div className="server-empty-card__mark" aria-hidden="true">
+                <img src="/astralis-mark.svg" alt="" />
+              </div>
+              <h1>Nenhum servidor</h1>
+              <p>Crie um servidor ou entre com um convite.</p>
+              <button type="button" onClick={() => setModalAberto(true)}>
+                Criar ou entrar
+              </button>
+            </div>
           </div>
         </div>
       )}

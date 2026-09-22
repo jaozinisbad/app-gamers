@@ -14,6 +14,7 @@ export default function ScreenShareSourcePicker({ onSelecionar, onFechar }) {
   const [selecionada, setSelecionada] = useState(null);
   const [capturarAudioApp, setCapturarAudioApp] = useState(false);
   const [ignorarAudioDiscord, setIgnorarAudioDiscord] = useState(false);
+  const [capturaCompativel, setCapturaCompativel] = useState(true);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
 
@@ -48,6 +49,7 @@ export default function ScreenShareSourcePicker({ onSelecionar, onFechar }) {
         // Só faz sentido pedir áudio isolado de um app quando a fonte
         // escolhida É um app (janela), não uma tela inteira.
         capturarAudioApp: fonte.tipo === 'janela' && capturarAudioApp,
+        modoCaptura: fonte.tipo === 'janela' && capturaCompativel ? 'compatibilidade' : 'padrao',
         tituloJanela: fonte.name,
         // O inverso: só faz sentido "ignorar o Discord" quando a fonte
         // é a tela inteira — se já é uma janela específica, o Discord
@@ -96,6 +98,13 @@ export default function ScreenShareSourcePicker({ onSelecionar, onFechar }) {
               </label>
             )}
 
+            {fontes.find((f) => f.id === selecionada)?.tipo === 'janela' && (
+              <label className="screen-picker-audio-app">
+                <input type="checkbox" checked={capturaCompativel} onChange={(e) => setCapturaCompativel(e.target.checked)} />
+                Usar captura compatível para janela/jogo (recomendada no Windows 10; evita a borda amarela quando suportada)
+              </label>
+            )}
+
             {fontes.find((f) => f.id === selecionada)?.tipo === 'tela' && (
               <label className="screen-picker-audio-app">
                 <input
@@ -103,7 +112,7 @@ export default function ScreenShareSourcePicker({ onSelecionar, onFechar }) {
                   checked={ignorarAudioDiscord}
                   onChange={(e) => setIgnorarAudioDiscord(e.target.checked)}
                 />
-                🔇 Ignorar o Discord no áudio (experimental, Windows) — evita o eco de quem
+                Ignorar o Discord no áudio (experimental, Windows) — evita o eco de quem
                 está na call ouvir a própria voz de volta
               </label>
             )}

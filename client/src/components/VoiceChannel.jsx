@@ -36,7 +36,7 @@ const BITRATE_MINIMO_TELA = 2_000_000;
 // Bitrate de áudio mais alto que o padrão do Opus (que gira uns 32kbps)
 // — com um microfone bom, vale a pena usar mais banda pra manter a
 // clareza da voz.
-const BITRATE_AUDIO = 96_000;
+const BITRATE_AUDIO = 128_000;
 
 // O áudio do sistema (jogo, música, etc.) se beneficia de mais banda
 // ainda que a voz, já que costuma ter mais variação de frequência.
@@ -100,6 +100,7 @@ const VoiceChannel = forwardRef(function VoiceChannel(
   const streamEnviadaRef = useRef(null); // depois do GainNode — essa é a enviada
   const contextoEntradaRef = useRef(null);
   const ganhoEntradaRef = useRef(null);
+  const filtroRuidoRef = useRef(null);
 
   const telaLocalRef = useRef(null);
   const resolucaoTelaAtualRef = useRef('720p'); // pra saber o alvo de bitrate ao (re)equilibrar entre espectadores
@@ -111,7 +112,7 @@ const VoiceChannel = forwardRef(function VoiceChannel(
   const audioMudoRef = useRef(false);
   const contextoAudioRef = useRef(null); // contexto só dos efeitos sonoros
   const telasComSomRef = useRef(new Set());
-  const configuracaoAudioRef = useRef({ volumeEntrada: 100, volumeSaida: 100, microfoneId: '', foneId: '' });
+  const configuracaoAudioRef = useRef({ volumeEntrada: 100, volumeSaida: 100, microfoneId: '', foneId: '', perfilEntrada: 'isolamento', supressaoRuido: 'rnnoise', cancelamentoEco: true, ganhoAutomatico: true });
   const videosRemotosRef = useRef({}); // socketId -> elemento <video> (pra tela cheia)
 
   // Calcula quanto bitrate CADA espectador deve receber agora, dividindo o
@@ -153,9 +154,9 @@ const VoiceChannel = forwardRef(function VoiceChannel(
     const salva = localStorage.getItem('configuracoesAudio');
     if (salva) {
       try {
-        configuracaoAudioRef.current = JSON.parse(salva);
+        configuracaoAudioRef.current = { ...configuracaoAudioRef.current, ...JSON.parse(salva) };
       } catch {
-        configuracaoAudioRef.current = { volumeEntrada: 100, volumeSaida: 100, microfoneId: '', foneId: '' };
+        configuracaoAudioRef.current = { volumeEntrada: 100, volumeSaida: 100, microfoneId: '', foneId: '', perfilEntrada: 'isolamento', supressaoRuido: 'rnnoise', cancelamentoEco: true, ganhoAutomatico: true };
       }
     }
   }, []);
@@ -204,13 +205,17 @@ const VoiceChannel = forwardRef(function VoiceChannel(
   // respeitamos o microfone escolhido nas Configurações — antes o app
   // sempre usava o microfone padrão do Windows, ignorando a escolha.
   async function montarPipelineDeEntrada(deviceId) {
+    const config = configuracaoAudioRef.current;
+    const isolamento = config.perfilEntrada !== 'estudio';
+    const usarRnnoise = isolamento && config.supressaoRuido === 'rnnoise';
     const constraints = {
       audio: {
         ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
+        echoCancellation: isolamento && config.cancelamentoEco !== false,
+        noiseSuppression: isolamento && config.supressaoRuido !== 'desligada',
+        autoGainControl: isolamento && config.ganhoAutomatico !== false,
         sampleRate: { ideal: 48000 },
+        channelCount: { ideal: 1 },
       },
     };
     let streamBruta;
@@ -223,10 +228,11 @@ const VoiceChannel = forwardRef(function VoiceChannel(
       // Nesse caso, deixa o sistema escolher o microfone padrão.
       streamBruta = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
+          echoCancellation: isolamento && config.cancelamentoEco !== false,
+          noiseSuppression: isolamento && config.supressaoRuido !== 'desligada',
+          autoGainControl: isolamento && config.ganhoAutomatico !== false,
           sampleRate: { ideal: 48000 },
+          channelCount: { ideal: 1 },
         },
       });
     }
@@ -237,12 +243,42 @@ const VoiceChannel = forwardRef(function VoiceChannel(
     const ganho = contexto.createGain();
     ganho.gain.value = (configuracaoAudioRef.current.volumeEntrada ?? 100) / 100;
     const destino = contexto.createMediaStreamDestination();
-    origem.connect(ganho).connect(destino);
+    let filtro = null;
+    if (usarRnnoise) {
+      try {
+        const { Rnnoise } = await import('@shiguredo/rnnoise-wasm');
+        const rnnoise = await Rnnoise.load();
+        const estado = rnnoise.createDenoiseState();
+        const processador = contexto.createScriptProcessor(1024, 1, 1);
+        const entrada = [];
+        const saida = [];
+        processador.onaudioprocess = (evento) => {
+          const canalEntrada = evento.inputBuffer.getChannelData(0);
+          const canalSaida = evento.outputBuffer.getChannelData(0);
+          for (let i = 0; i < canalEntrada.length; i += 1) entrada.push(canalEntrada[i]);
+          while (entrada.length >= rnnoise.frameSize) {
+            const quadro = Float32Array.from(entrada.splice(0, rnnoise.frameSize));
+            estado.processFrame(quadro);
+            for (let i = 0; i < quadro.length; i += 1) saida.push(quadro[i]);
+          }
+          for (let i = 0; i < canalSaida.length; i += 1) canalSaida[i] = saida.length ? saida.shift() : 0;
+        };
+        origem.connect(processador).connect(ganho);
+        filtro = { destruir: () => { processador.disconnect(); estado.destroy(); } };
+      } catch (err) {
+        // A supressão nativa continua ativa se o WebAssembly não puder carregar.
+        origem.connect(ganho);
+      }
+    } else {
+      origem.connect(ganho);
+    }
+    ganho.connect(destino);
 
     streamLocalRef.current = streamBruta;
     streamEnviadaRef.current = destino.stream;
     contextoEntradaRef.current = contexto;
     ganhoEntradaRef.current = ganho;
+    filtroRuidoRef.current = filtro;
 
     streamBruta.getAudioTracks().forEach((t) => (t.enabled = !micMudo));
 
@@ -573,6 +609,8 @@ const VoiceChannel = forwardRef(function VoiceChannel(
       streamLocalRef.current?.getTracks().forEach((t) => t.stop());
       streamLocalRef.current = null;
       streamEnviadaRef.current = null;
+      filtroRuidoRef.current?.destruir();
+      filtroRuidoRef.current = null;
       contextoEntradaRef.current?.close().catch(() => {});
       contextoEntradaRef.current = null;
       telaLocalRef.current?.getTracks().forEach((t) => t.stop());
@@ -634,7 +672,8 @@ const VoiceChannel = forwardRef(function VoiceChannel(
         ? { largura: 1920, altura: 1080 }
         : { largura: 1280, altura: 720 };
 
-      if (config?.fonteId && window.electronAPI?.definirFonteCompartilhamento) {
+      const usarCapturaCompativel = config?.modoCaptura === 'compatibilidade' && config?.fonteId;
+      if (!usarCapturaCompativel && config?.fonteId && window.electronAPI?.definirFonteCompartilhamento) {
         window.electronAPI.definirFonteCompartilhamento(config.fonteId);
       }
 
@@ -647,14 +686,30 @@ const VoiceChannel = forwardRef(function VoiceChannel(
       const usarAudioPorApp = !!config?.capturarAudioApp && !!config?.tituloJanela;
       const usarAudioIgnorandoApp = !!config?.ignorarProcessoAudio;
 
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          width: { ideal: dimensoes.largura, max: dimensoes.largura },
-          height: { ideal: dimensoes.altura, max: dimensoes.altura },
-          frameRate: { ideal: fps, max: fps },
-        },
-        audio: !usarAudioPorApp && !usarAudioIgnorandoApp,
-      });
+      const stream = usarCapturaCompativel
+        ? await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            mandatory: {
+              chromeMediaSource: 'desktop',
+              chromeMediaSourceId: config.fonteId,
+              minWidth: dimensoes.largura,
+              maxWidth: dimensoes.largura,
+              minHeight: dimensoes.altura,
+              maxHeight: dimensoes.altura,
+              minFrameRate: fps,
+              maxFrameRate: fps,
+            },
+          },
+        })
+        : await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            width: { ideal: dimensoes.largura, max: dimensoes.largura },
+            height: { ideal: dimensoes.altura, max: dimensoes.altura },
+            frameRate: { ideal: fps, max: fps },
+          },
+          audio: !usarAudioPorApp && !usarAudioIgnorandoApp,
+        });
 
       const videoTrack = stream.getVideoTracks()[0];
       let audioTrackTela = stream.getAudioTracks()[0]; // pode não vir, dependendo do sistema
@@ -697,7 +752,7 @@ const VoiceChannel = forwardRef(function VoiceChannel(
           audioTrackTela = pipeline.stream.getAudioTracks()[0];
         } else {
           setErroCompartilhamento(
-            `Não consegui ignorar o ${nomeProcesso} no áudio (${resultado?.mensagem || 'motivo desconhecido'}). Compartilhando com o áudio do sistema inteiro, ${nomeProcesso} incluído.`,
+            `Não consegui ignorar o ${nomeProcesso} no áudio (${resultado?.mensagem || 'motivo desconhecido'}). A transmissão seguirá sem áudio do sistema.`,
           );
           audioTrackTela = null;
         }
@@ -810,7 +865,9 @@ const VoiceChannel = forwardRef(function VoiceChannel(
   async function aplicarConfiguracao(config) {
     if (!config) return;
 
-    const microfoneMudou = config.microfoneId !== configuracaoAudioRef.current.microfoneId;
+    const configuracaoAnterior = configuracaoAudioRef.current;
+    const precisaReconstruirEntrada = ['microfoneId', 'perfilEntrada', 'supressaoRuido', 'cancelamentoEco', 'ganhoAutomatico']
+      .some((chave) => config[chave] !== undefined && config[chave] !== configuracaoAnterior[chave]);
     configuracaoAudioRef.current = { ...configuracaoAudioRef.current, ...config };
 
     if (config.volumeEntrada !== undefined && ganhoEntradaRef.current && contextoEntradaRef.current) {
@@ -822,9 +879,11 @@ const VoiceChannel = forwardRef(function VoiceChannel(
       aplicarVolumeESaidaNosAudios();
     }
 
-    if (microfoneMudou && streamLocalRef.current) {
+    if (precisaReconstruirEntrada && streamLocalRef.current) {
       try {
         streamLocalRef.current.getTracks().forEach((t) => t.stop());
+        filtroRuidoRef.current?.destruir();
+        filtroRuidoRef.current = null;
         contextoEntradaRef.current?.close().catch(() => {});
         const novaTrackEnviada = await montarPipelineDeEntrada(config.microfoneId);
 
@@ -890,7 +949,7 @@ const VoiceChannel = forwardRef(function VoiceChannel(
 
   return (
     <div className="content voice-call-panel">
-      <div className="content__header">🔊 {canal.nome} — transmissão de tela</div>
+      <div className="content__header"><span className="content__channel-symbol">◌</span> {canal.nome} — transmissão de tela</div>
       <div className="content__body">
         <div className="telas-compartilhadas">
           {compartilhandoTela && (
@@ -935,7 +994,7 @@ const VoiceChannel = forwardRef(function VoiceChannel(
                   title={mutada ? 'Ativar o áudio dessa tela' : 'Mutar o áudio dessa tela'}
                   type="button"
                 >
-                  {mutada ? '🔇' : '🔊'}
+                  {mutada ? 'Som desligado' : 'Som ligado'}
                 </button>
                 <button
                   className="tela-tile__ocultar"
@@ -943,7 +1002,7 @@ const VoiceChannel = forwardRef(function VoiceChannel(
                   title="Parar de assistir essa tela (sem sair da call)"
                   type="button"
                 >
-                  🙈
+                  Ocultar
                 </button>
               </div>
             );

@@ -1,6 +1,7 @@
 const express = require('express');
 const { all, get, run, db, gerarCodigoConvite } = require('../db');
 const autenticar = require('../middleware/autenticar');
+const { estaOnline } = require('../presenca');
 
 const router = express.Router();
 router.use(autenticar);
@@ -170,7 +171,7 @@ router.get('/servidores/:id/membros', safe(async (req, res) => {
     });
     if (membro.cargo_id) agrupados.get(membro.usuario_id).cargos.push({ id: membro.cargo_id, nome: membro.cargo_nome, cor: membro.cargo_cor });
   }
-  res.json([...agrupados.values()]);
+  res.json([...agrupados.values()].map((membro) => ({ ...membro, online: estaOnline(membro.id) })));
 }));
 
 router.post('/servidores/:id/cargos', safe(async (req, res) => {

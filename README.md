@@ -1,26 +1,71 @@
-# App de comunicação para gamers
+<p align="center">
+  <img src="client/public/astralis-mark.svg" alt="Logo Astralis" width="128" height="128" />
+</p>
 
-Aplicativo Electron + React para conversar em servidores privados com amigos.
-O backend usa Express + Socket.IO e o banco PostgreSQL hospedado no Neon.
+<h1 align="center">Astralis</h1>
 
-## Executar localmente
+<p align="center">Um espaço privado para conversar, jogar e compartilhar momentos com seus amigos.</p>
 
-1. Configure `server/.env` a partir de `server/.env.example`, usando a URL pooled
-   de uma branch Neon de desenvolvimento e um `JWT_SECRET` local.
-2. Na pasta `server`, execute `npm install` e `npm run dev`.
-3. Em outro terminal, na pasta `client`, execute `npm install` e `npm run dev:electron`.
+## Sobre
 
-Não envie arquivos `.env` nem URLs de banco ao Git. O backend não usa mais o
-arquivo SQLite local durante a execução. A transferência inicial dos dados e a
-publicação no Render estão descritas em [`docs/render.md`](docs/render.md).
+Astralis é um aplicativo de comunidade para Windows e macOS, inspirado nas ferramentas que tornam simples ficar em contato durante uma partida. O projeto reúne um cliente desktop em Electron e React e um backend Express com Socket.IO. Os dados são armazenados em PostgreSQL no Neon; o backend é hospedado no Render.
 
 ## Recursos
 
-- Cadastro e login com senha criptografada e sessão JWT
-- Servidores, convites, canais, membros e permissões
-- Chat de texto e mensagens diretas persistidos no PostgreSQL
-- Chamadas de voz e compartilhamento de tela por WebRTC
-- Atualizações do app Electron por GitHub Releases
+- Contas, login e perfis de usuário
+- Servidores privados, convites, canais de texto e voz
+- Mensagens em canais e conversas diretas
+- Lista de membros com presença online atualizada em tempo real
+- Chamadas de voz com seleção de dispositivos, perfis de áudio e redução de ruído RNNoise
+- Compartilhamento de tela ou janela em chamadas
+- Atualizações do aplicativo por GitHub Releases
 
-O app exige Node.js 22.5 ou superior. Voz e compartilhamento usam conexão
-ponto a ponto; algumas redes podem exigir configuração de TURN.
+## Baixar
+
+Encontre o instalador mais recente para Windows na página [Releases](https://github.com/jaozinisbad/astralis/releases). O aplicativo avisa quando há uma atualização disponível.
+
+## Executar localmente
+
+Requisitos: Node.js 22.5 ou superior e npm.
+
+1. Clone o repositório e instale as dependências do servidor e do cliente:
+
+   ```powershell
+   git clone https://github.com/jaozinisbad/astralis.git
+   cd astralis
+   cd server; npm install; cd ..
+   cd client; npm install; cd ..
+   ```
+
+2. Crie `server/.env` com base em `server/.env.example`. Configure `DATABASE_URL` com uma URL pooled de desenvolvimento do Neon e defina um `JWT_SECRET` longo e aleatório.
+
+3. Em um terminal, inicie o backend:
+
+   ```powershell
+   cd server
+   npm run dev
+   ```
+
+4. Em outro terminal, abra o cliente desktop:
+
+   ```powershell
+   cd client
+   npm run dev:electron
+   ```
+
+Para apontar o cliente local a outro backend, defina `VITE_SERVER_URL` em `client/.env.local`. Sem essa variável, o app usa o backend publicado.
+
+## Testes e build
+
+Na pasta `client`, use `npm test` para executar os testes e `npm run build` para gerar os arquivos web do cliente. `npm run dist` cria o instalador do sistema operacional atual.
+
+As chamadas de voz e o compartilhamento de tela usam WebRTC entre os participantes. Algumas redes podem exigir um servidor TURN para permitir conexões ponto a ponto.
+
+## Infraestrutura
+
+- Cliente: Electron, React e Vite
+- Backend: Node.js, Express e Socket.IO
+- Banco de dados: PostgreSQL no Neon
+- Hospedagem do backend: Render
+
+As instruções de migração e configuração do banco e do Render estão em [`docs/render.md`](docs/render.md). Nunca envie arquivos `.env`, senhas, tokens ou URLs de banco com credenciais para o Git.

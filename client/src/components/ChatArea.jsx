@@ -1,6 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../api.js';
 
+function ChatIcon({ nome }) {
+  const paths = nome === 'anexo'
+    ? <path d="m7 10 5.5-5.5a3 3 0 1 1 4.2 4.2L9 16.4A4.5 4.5 0 0 1 2.6 10l7.1-7.1" />
+    : <path d="M3 5h14M8 5V3h4v2M5 5l1 12h8l1-12M8 9v4M12 9v4" />;
+  return <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths}</svg>;
+}
+
 export default function ChatArea({ canal, statusConexao, socket, token, nomeUsuario, meuUsuarioId, podeApagarMensagens }) {
   const [mensagens, setMensagens] = useState([]);
   const [texto, setTexto] = useState('');
@@ -86,7 +93,7 @@ export default function ChatArea({ canal, statusConexao, socket, token, nomeUsua
   return (
     <div className="content">
       <div className="content__header">
-        {canal.tipo === 'texto' ? '#' : '🔊'} {canal.nome}
+        <span className="content__channel-symbol">{canal.tipo === 'texto' ? '#' : '◌'}</span> {canal.nome}
       </div>
 
       {canal.tipo === 'texto' ? (
@@ -106,7 +113,7 @@ export default function ChatArea({ canal, statusConexao, socket, token, nomeUsua
                       <span className="hora">{new Date(m.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
                       {podeApagar && (
                         <button type="button" className="chat-mensagem__apagar" title="Apagar mensagem" onClick={() => apagarMensagem(m.id)}>
-                          🗑️
+                          <ChatIcon nome="apagar" />
                         </button>
                       )}
                     </div>
@@ -127,7 +134,7 @@ export default function ChatArea({ canal, statusConexao, socket, token, nomeUsua
             </div>
           </div>
           <form className="chat-input-area" onSubmit={enviar}>
-            <button type="button" className="chat-anexo-botao" onClick={() => inputArquivo.current?.click()} title="Anexar imagem ou arquivo">📎</button>
+            <button type="button" className="chat-anexo-botao" onClick={() => inputArquivo.current?.click()} title="Anexar imagem ou arquivo"><ChatIcon nome="anexo" /></button>
             <input ref={inputArquivo} type="file" hidden onChange={(e) => setArquivo(e.target.files?.[0] || null)} />
             <input
               className="chat-input"
@@ -135,7 +142,7 @@ export default function ChatArea({ canal, statusConexao, socket, token, nomeUsua
               value={texto}
               onChange={(e) => setTexto(e.target.value)}
             />
-            {arquivo && <span className="chat-arquivo-selecionado" title={arquivo.name}>📄 {arquivo.name}</span>}
+            {arquivo && <span className="chat-arquivo-selecionado" title={arquivo.name}>Arquivo: {arquivo.name}</span>}
           </form>
         </>
       ) : (

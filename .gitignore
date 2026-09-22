@@ -12,6 +12,8 @@ node_modules/
 # Builds gerados
 client/dist/
 client/release/
+client/build-artifacts-*/
+client/release-render/
 
 # Logs
 *.log
@@ -20,3 +22,4 @@ npm-debug.log*
 # Sistema
 .DS_Store
 Thumbs.db
+.neon

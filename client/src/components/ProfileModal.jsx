@@ -145,8 +145,8 @@ export default function ProfileModal({ usuario, onFechar, onSalvar }) {
       <form className="modal profile-modal" onClick={(event) => event.stopPropagation()} onSubmit={salvar}>
         <div className="profile-modal__heading">
           <div>
-            <span className="eyebrow">Seu espaço</span>
-            <h2>Personalizar perfil</h2>
+            <span className="eyebrow">Perfil principal</span>
+            <h2>Personalize seu perfil</h2>
           </div>
           <div className="profile-modal__preview">
             <div className="profile-banner-preview" style={bannerUrl ? { backgroundImage: `url(${bannerUrl})` } : undefined} />
@@ -159,9 +159,9 @@ export default function ProfileModal({ usuario, onFechar, onSalvar }) {
           <div className="profile-foto-acoes">
             <input ref={inputBannerRef} type="file" accept="image/*" onChange={selecionarBanner} style={{ display: 'none' }} />
             <button type="button" onClick={() => inputBannerRef.current?.click()} className="btn-foto-upload">
-              {bannerUrl ? '🖼️ Trocar faixa' : '🖼️ Adicionar faixa'}
+              {bannerUrl ? 'Trocar faixa' : 'Adicionar faixa'}
             </button>
-            {bannerUrl && <button type="button" onClick={() => { setBannerUrl(null); inputBannerRef.current.value = ''; }} className="btn-foto-remover">❌ Remover faixa</button>}
+            {bannerUrl && <button type="button" onClick={() => { setBannerUrl(null); inputBannerRef.current.value = ''; }} className="btn-foto-remover">Remover faixa</button>}
           </div>
         </div>
 
@@ -190,7 +190,7 @@ export default function ProfileModal({ usuario, onFechar, onSalvar }) {
               onClick={() => inputFotoRef.current?.click()}
               className="btn-foto-upload"
             >
-              {avatarUrl ? '📷 Trocar foto' : '📷 Adicionar foto'}
+              {avatarUrl ? 'Trocar foto' : 'Adicionar foto'}
             </button>
             {avatarUrl && (
               <button
@@ -198,7 +198,7 @@ export default function ProfileModal({ usuario, onFechar, onSalvar }) {
                 onClick={removerFoto}
                 className="btn-foto-remover"
               >
-                ❌ Remover foto
+                Remover foto
               </button>
             )}
           </div>
