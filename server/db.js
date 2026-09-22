@@ -10,6 +10,22 @@ const crypto = require('crypto');
 // o resto do código (rotas) não depende de qual banco está por trás.
 const databasePath = process.env.DATABASE_PATH || path.join(__dirname, 'app-gamers.db');
 fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+// Snapshot privado de migracao: restaura somente quando nao existe banco local.
+const seedCount = Number(process.env.DATABASE_SEED_PARTS || 0);
+const databaseSeed = Array.from({ length: seedCount }, (_, i) => {
+  const part = process.env[`DATABASE_SEED_PART_${i}`];
+  if (!part) throw new Error('Parte do snapshot SQLite ausente');
+  return part;
+}).join('');
+if (!fs.existsSync(databasePath) && databaseSeed) {
+  const { gunzipSync } = require('zlib');
+  const snapshot = gunzipSync(Buffer.from(databaseSeed, 'base64'));
+  if (snapshot.subarray(0, 16).toString() !== 'SQLite format 3\0') {
+    throw new Error('Snapshot SQLite invalido');
+  }
+  fs.writeFileSync(databasePath, snapshot, { flag: 'wx', mode: 0o600 });
+  console.log('Snapshot SQLite restaurado.');
+}
 const db = new DatabaseSync(databasePath);
 
 db.exec('PRAGMA foreign_keys = ON;');
