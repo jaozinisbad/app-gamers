@@ -48,7 +48,7 @@ export default function LoginScreen({ onAutenticado }) {
 
       <section className="auth-card" aria-labelledby="auth-form-title">
         <div className="auth-brand">
-          <img className="auth-brand__mark" src="/astralis-mark.svg" alt="" />
+          <img className="auth-brand__mark" src="./astralis-mark.svg" alt="" />
           <span>ASTRALIS</span>
         </div>
 

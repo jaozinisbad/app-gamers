@@ -431,7 +431,7 @@ export default function App() {
           <div className="content__body server-empty-screen__body">
             <div className="server-empty-card">
               <div className="server-empty-card__mark" aria-hidden="true">
-                <img src="/astralis-mark.svg" alt="" />
+                <img src="./astralis-mark.svg" alt="" />
               </div>
               <h1>Nenhum servidor</h1>
               <p>Crie um servidor ou entre com um convite.</p>
