@@ -4,6 +4,9 @@ const path = require('path');
 const { exec } = require('child_process');
 
 app.setName('Astralis');
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.appgamers.client');
+}
 
 // loopback-capture só funciona no Windows — em qualquer outro sistema
 // (dev no Mac/Linux, por exemplo) isso falha ao importar, então
@@ -246,6 +249,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
     },
   });
+  win.removeMenu();
 
   if (!app.isPackaged) {
     // Modo desenvolvimento: aponta pro servidor do Vite
