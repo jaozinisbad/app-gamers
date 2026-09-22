@@ -1,68 +1,47 @@
-# Publicar o backend no Render
+# Banco e publicação no Render
 
-O `render.yaml` publica somente o servidor Express + Socket.IO. O cliente
-Electron continua sendo instalado no computador dos usuarios.
+O servidor usa PostgreSQL no Neon. O Render continua hospedando apenas o
+backend Express + Socket.IO; o cliente Electron é instalado nos computadores
+dos jogadores.
 
-## Armazenamento escolhido: gratuito para testes
+## Configuração local
 
-O plano gratuito foi escolhido para esta etapa. O Blueprint esta configurado
-com `plan: free`, sem disco pago. O SQLite
-nesse plano e temporario: contas, mensagens e servidores podem desaparecer
-quando o servico reiniciar ou receber um deploy.
+Copie `server/.env.example` para `server/.env`, preencha `DATABASE_URL` com a
+URL pooled da branch de teste do Neon e defina um `JWT_SECRET` longo e aleatório.
+Não compartilhe nem envie o arquivo `.env` ao Git. O banco local SQLite é a
+origem da migração; o backend não o usa mais em execução.
 
-Para manter SQLite em producao, altere `plan` para `starter` e acrescente
-ao servico os campos abaixo (servico e disco sao pagos):
+## Migração e validação
 
-```yaml
-    disk:
-      name: app-gamers-data
-      mountPath: /var/data
-      sizeGB: 1
-```
+O script `server/scripts/migrate-sqlite-to-postgres.js` recria o schema público
+do banco de destino antes de importar os dados locais. Use-o somente em uma
+branch Neon descartável, nunca em produção, e defina
+`ALLOW_DESTRUCTIVE_MIGRATION=1` conscientemente. Os dados foram importados e
+validados primeiro em `migration-test` e depois na branch `production`. A
+branch principal contém as 11 contas e os dados de servidores, mensagens,
+cargos e amizades da base local.
 
-Acrescente tambem a lista `envVars`:
+A branch principal do Neon já contém os dados do app. A branch de teste expira
+e não deve ser usada como banco permanente.
 
-```yaml
-      - key: DATABASE_PATH
-        value: /var/data/app-gamers.db
-```
+## Configuração do Render
 
-O servidor cria o diretorio e o banco quando inicia. Sem `DATABASE_PATH`,
-continua usando `server/app-gamers.db`. A publicacao comeca com um banco
-novo; os dados locais nao sao enviados automaticamente. Para preservar dados
-existentes, planeje uma transferencia com o servidor parado antes de liberar
-o acesso. Use apenas uma instancia, pois o SQLite e a presenca em memoria
-nao estao preparados para varias instancias.
+O `render.yaml` define o serviço gratuito e pede `DATABASE_URL` como variável
+secreta, sem incluir credenciais no repositório. No Dashboard do Render,
+configure essa variável com a URL pooled do branch de produção do Neon. Mantenha
+`JWT_SECRET` igual ao valor atual do serviço para preservar as sessões existentes.
+Não aplique um novo deploy até confirmar que a branch de produção já contém os
+dados necessários e que `DATABASE_URL` aponta para ela.
 
-## Publicacao
-
-1. Revise o diff. O armazenamento escolhido nesta etapa e o gratuito temporario.
-2. Se tiver o Render CLI instalado e autenticado, execute
-   `render blueprints validate render.yaml` na raiz do projeto.
-3. Faça commit dos arquivos desta preparacao e push para a branch `master`
-   de `https://github.com/jaozinisbad/app-gamers`.
-4. No Dashboard do Render, crie um Blueprint desse repositorio e selecione
-   a branch `master` e o workspace `jaozinisbad projects`.
-5. Revise o plano antes de aplicar. `JWT_SECRET` sera gerado pelo Render.
-   A porta e fornecida automaticamente por `PORT`.
-6. Espere o deploy ficar `Live` e verifique se `/` responde com HTTP 200.
+O endpoint `/` serve como health check. Após configurar banco e publicar,
+valide login com a conta existente, leitura de mensagens, envio de mensagem,
+conexão Socket.IO e acesso a partir de dois clientes.
 
 ## Cliente Electron
 
-Depois de obter a URL real do backend, configure em `client/.env.local`:
+Configure `VITE_SERVER_URL` em `client/.env.local` com a URL do backend Render.
+Essa variável entra no build; gere e distribua uma nova versão do cliente após
+alterá-la. Instalações antigas continuam usando a URL compilada anteriormente.
 
-```dotenv
-VITE_SERVER_URL=https://SEU-SERVICO.onrender.com
-```
-
-Essa variavel e incorporada durante o build. Gere uma nova versao do cliente
-com `npm run dist` na pasta `client` e distribua o instalador. Instaladores
-antigos continuam usando a URL anterior. Para testar localmente com esse
-backend, reinicie o Vite depois de configurar a variavel.
-
-Teste cadastro/login, mensagens e conexao Socket.IO entre dois clientes.
-Voz e tela usam WebRTC entre os computadores; hospedar a sinalizacao no
-Render nao substitui um servidor TURN nas redes que exigem esse recurso.
-
-Referencias: https://render.com/docs/disks e
-https://render.com/docs/blueprint-spec.
+Voz e compartilhamento de tela usam WebRTC ponto a ponto. O Render hospeda a
+sinalização, mas não substitui um servidor TURN nas redes que exigem relay.

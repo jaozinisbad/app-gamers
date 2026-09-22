@@ -1,4 +1,4 @@
-const URL_PUBLICA = 'https://voltage-phoney-stunt.ngrok-free.dev';
+const URL_PUBLICA = 'https://app-gamers-server.onrender.com';
 export const SERVER_URL = import.meta.env.VITE_SERVER_URL || (import.meta.env.DEV ? 'http://localhost:3001' : URL_PUBLICA);
 
 export async function apiFetch(caminho, token, opcoes = {}) {

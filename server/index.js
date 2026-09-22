@@ -5,7 +5,7 @@ const http = require('http');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const { Server } = require('socket.io');
-const { db } = require('./db');
+const { all, get, run, initDb } = require('./db');
 const authRoutes = require('./routes/auth');
 const { router: servidoresRoutes, ehMembro, temPermissao } = require('./routes/servidores');
 const mensagensRoutes = require('./routes/mensagens');
@@ -36,16 +36,18 @@ app.use('/api', mensagensRoutes);
 app.use('/api', amigosRoutes);
 
 function servidorDoCanal(canalId) {
-  return db.prepare('SELECT servidor_id FROM canais WHERE id = ?').get(canalId);
+  return get('SELECT servidor_id FROM canais WHERE id = ?', canalId);
 }
 
 // Controle em memória de quem está em qual canal de voz (não precisa
 // persistir no banco — é só presença em tempo real).
 const canalVozParticipantes = {}; // canalId -> Map(socketId -> nome)
+const asyncSocket = (handler) => (...args) => {
+  Promise.resolve(handler(...args)).catch((error) => console.error('Erro em evento Socket.IO:', error));
+};
 
-function amigosDe(usuarioId) {
-  return db
-    .prepare(
+async function amigosDe(usuarioId) {
+  return all(
       `SELECT DISTINCT u.id
        FROM usuarios u
        JOIN membros_servidor m2 ON m2.usuario_id = u.id
@@ -53,22 +55,18 @@ function amigosDe(usuarioId) {
          SELECT servidor_id FROM membros_servidor WHERE usuario_id = ?
        )
        AND u.id != ?`
-    )
-    .all(usuarioId, usuarioId)
-    .map((linha) => linha.id);
+    , usuarioId, usuarioId).then((rows) => rows.map((linha) => linha.id));
 }
 
-function avisarAmigos(usuarioId, evento) {
-  amigosDe(usuarioId).forEach((amigoId) => {
+async function avisarAmigos(usuarioId, evento) {
+  (await amigosDe(usuarioId)).forEach((amigoId) => {
     const sockets = socketsPorUsuario.get(amigoId);
     sockets?.forEach((socketId) => io.to(socketId).emit(evento, { usuarioId }));
   });
 }
 
-function membrosDoServidor(servidorId) {
-  return db
-    .prepare('SELECT usuario_id FROM membros_servidor WHERE servidor_id = ?')
-    .all(servidorId)
+async function membrosDoServidor(servidorId) {
+  return (await all('SELECT usuario_id FROM membros_servidor WHERE servidor_id = ?', servidorId))
     .map((linha) => linha.usuario_id);
 }
 
@@ -87,12 +85,12 @@ function listaParticipantesDoCanal(canalId) {
 // Avisa TODO MUNDO do servidor (não só quem já está na call) quem está
 // em cada canal de voz agora — é o que alimenta a pré-visualização de
 // participantes na lista de canais, mesmo pra quem ainda não entrou.
-function avisarPresencaVoz(canalId) {
-  const canal = servidorDoCanal(canalId);
+async function avisarPresencaVoz(canalId) {
+  const canal = await servidorDoCanal(canalId);
   if (!canal) return;
 
   const participantes = listaParticipantesDoCanal(canalId);
-  membrosDoServidor(canal.servidor_id).forEach((usuarioId) => {
+  (await membrosDoServidor(canal.servidor_id)).forEach((usuarioId) => {
     socketsPorUsuario.get(usuarioId)?.forEach((socketId) => {
       io.to(socketId).emit('presenca-voz-canal', { canalId, participantes });
     });
@@ -107,7 +105,7 @@ function sairDoCanalVoz(socket) {
   canalVozParticipantes[canalId]?.delete(socket.id);
   io.to(`voz-${canalId}`).emit('peer-saiu', { socketId: socket.id });
   socket.canalVozAtual = null;
-  avisarPresencaVoz(canalId);
+  void avisarPresencaVoz(canalId);
 }
 
 // Exige um token válido para abrir a conexão de tempo real (chat/voz).
@@ -132,32 +130,31 @@ io.on('connection', (socket) => {
   const jaEstavaOnline = socketsPorUsuario.has(socket.usuario.id);
   if (!socketsPorUsuario.has(socket.usuario.id)) socketsPorUsuario.set(socket.usuario.id, new Set());
   socketsPorUsuario.get(socket.usuario.id).add(socket.id);
-  if (!jaEstavaOnline) avisarAmigos(socket.usuario.id, 'amigo-online');
+  if (!jaEstavaOnline) void avisarAmigos(socket.usuario.id, 'amigo-online');
 
   // Entrar na "sala" de um canal de texto para receber as mensagens dele.
-  socket.on('entrar-canal', (canalId) => {
-    const canal = servidorDoCanal(canalId);
-    if (!canal || !ehMembro(canal.servidor_id, socket.usuario.id)) return;
+  socket.on('entrar-canal', asyncSocket(async (canalId) => {
+    const canal = await servidorDoCanal(canalId);
+    if (!canal || !(await ehMembro(canal.servidor_id, socket.usuario.id))) return;
     socket.join(`canal-${canalId}`);
-  });
+  }));
 
   socket.on('sair-canal', (canalId) => {
     socket.leave(`canal-${canalId}`);
   });
 
   // Enviar mensagem: salva no banco e retransmite pra todo mundo na sala do canal.
-  socket.on('enviar-mensagem', ({ canalId, conteudo, anexo }) => {
+  socket.on('enviar-mensagem', asyncSocket(async ({ canalId, conteudo, anexo }) => {
     const texto = typeof conteudo === 'string' ? conteudo.trim() : '';
     if (!texto && !anexo?.url) return;
 
-    const canal = servidorDoCanal(canalId);
-    if (!canal || !ehMembro(canal.servidor_id, socket.usuario.id)) return;
+    const canal = await servidorDoCanal(canalId);
+    if (!canal || !(await ehMembro(canal.servidor_id, socket.usuario.id))) return;
 
     if (anexo?.url && (!String(anexo.url).startsWith('data:') || String(anexo.url).length > 7000000)) return;
 
-    const resultado = db
-      .prepare('INSERT INTO mensagens (canal_id, usuario_id, conteudo, anexo_nome, anexo_tipo, anexo_url, anexo_tamanho) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(canalId, socket.usuario.id, texto, anexo?.nome || null, anexo?.tipo || null, anexo?.url || null, Number(anexo?.tamanho) || null);
+    const resultado = await get('INSERT INTO mensagens (canal_id, usuario_id, conteudo, anexo_nome, anexo_tipo, anexo_url, anexo_tamanho) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id',
+      canalId, socket.usuario.id, texto, anexo?.nome || null, anexo?.tipo || null, anexo?.url || null, Number(anexo?.tamanho) || null);
 
     const mensagem = {
       id: resultado.lastInsertRowid,
@@ -172,29 +169,29 @@ io.on('connection', (socket) => {
     };
 
     io.to(`canal-${canalId}`).emit('nova-mensagem', { canalId, mensagem });
-  });
+  }));
 
   // Apaga uma mensagem: o próprio autor sempre pode, ou quem tiver a
   // permissão de gerenciar mensagens de outras pessoas nesse servidor.
-  socket.on('apagar-mensagem', ({ canalId, mensagemId }) => {
-    const canal = servidorDoCanal(canalId);
-    if (!canal || !ehMembro(canal.servidor_id, socket.usuario.id)) return;
+  socket.on('apagar-mensagem', asyncSocket(async ({ canalId, mensagemId }) => {
+    const canal = await servidorDoCanal(canalId);
+    if (!canal || !(await ehMembro(canal.servidor_id, socket.usuario.id))) return;
 
-    const mensagem = db.prepare('SELECT usuario_id FROM mensagens WHERE id = ? AND canal_id = ?').get(mensagemId, canalId);
+    const mensagem = await get('SELECT usuario_id FROM mensagens WHERE id = ? AND canal_id = ?', mensagemId, canalId);
     if (!mensagem) return;
 
     const ehAutor = mensagem.usuario_id === socket.usuario.id;
-    if (!ehAutor && !temPermissao(canal.servidor_id, socket.usuario.id, 'gerenciar_mensagens')) return;
+    if (!ehAutor && !(await temPermissao(canal.servidor_id, socket.usuario.id, 'gerenciar_mensagens'))) return;
 
-    db.prepare('DELETE FROM mensagens WHERE id = ?').run(mensagemId);
+    await run('DELETE FROM mensagens WHERE id = ?', mensagemId);
     io.to(`canal-${canalId}`).emit('mensagem-apagada', { canalId, mensagemId });
-  });
+  }));
 
   // --- Canal de voz: presença + sinalização WebRTC ---
 
-  socket.on('entrar-canal-voz', (canalId) => {
-    const canal = servidorDoCanal(canalId);
-    if (!canal || !ehMembro(canal.servidor_id, socket.usuario.id)) return;
+  socket.on('entrar-canal-voz', asyncSocket(async (canalId) => {
+    const canal = await servidorDoCanal(canalId);
+    if (!canal || !(await ehMembro(canal.servidor_id, socket.usuario.id))) return;
 
     // Se já estava em outro canal de voz, sai dele primeiro.
     sairDoCanalVoz(socket);
@@ -202,9 +199,7 @@ io.on('connection', (socket) => {
     if (!canalVozParticipantes[canalId]) canalVozParticipantes[canalId] = new Map();
 
     // Busca dados completos do usuário (incluindo avatar_cor e avatar_url)
-    const usuario = db
-      .prepare('SELECT id, nome, avatar_cor, avatar_url FROM usuarios WHERE id = ?')
-      .get(socket.usuario.id);
+    const usuario = await get('SELECT id, nome, avatar_cor, avatar_url FROM usuarios WHERE id = ?', socket.usuario.id);
 
     // Manda pro recém-chegado a lista de quem já está na chamada.
     const peers = Array.from(canalVozParticipantes[canalId].entries()).map(([socketId, dadosUsuario]) => ({
@@ -232,18 +227,16 @@ io.on('connection', (socket) => {
       avatarCor: usuario.avatar_cor || '#5865f2',
       avatarUrl: usuario.avatar_url || null,
     });
-    avisarPresencaVoz(canalId);
-  });
+    void avisarPresencaVoz(canalId);
+  }));
 
   // Um cliente pede o retrato atual de quem está em cada canal de voz de
   // um servidor — usado quando abre a lista de canais, mesmo sem ter
   // entrado em nenhuma call ainda (pré-visualização).
-  socket.on('obter-presenca-servidor', (servidorId) => {
-    if (!ehMembro(servidorId, socket.usuario.id)) return;
+  socket.on('obter-presenca-servidor', asyncSocket(async (servidorId) => {
+    if (!(await ehMembro(servidorId, socket.usuario.id))) return;
 
-    const canaisDeVoz = db
-      .prepare("SELECT id FROM canais WHERE servidor_id = ? AND tipo = 'voz'")
-      .all(servidorId);
+    const canaisDeVoz = await all("SELECT id FROM canais WHERE servidor_id = ? AND tipo = 'voz'", servidorId);
 
     const participantesPorCanal = {};
     canaisDeVoz.forEach(({ id }) => {
@@ -251,15 +244,15 @@ io.on('connection', (socket) => {
     });
 
     socket.emit('presenca-voz-servidor', { participantesPorCanal });
-  });
+  }));
 
   socket.on('sair-canal-voz', () => sairDoCanalVoz(socket));
 
   // Expulsa alguém de um canal de voz — exige permissão nesse servidor.
-  socket.on('expulsar-da-call', ({ canalId, usuarioId }) => {
-    const canal = servidorDoCanal(canalId);
+  socket.on('expulsar-da-call', asyncSocket(async ({ canalId, usuarioId }) => {
+    const canal = await servidorDoCanal(canalId);
     if (!canal) return;
-    if (!temPermissao(canal.servidor_id, socket.usuario.id, 'expulsar_call')) return;
+    if (!(await temPermissao(canal.servidor_id, socket.usuario.id, 'expulsar_call'))) return;
 
     const socketsDoAlvo = socketsPorUsuario.get(usuarioId);
     socketsDoAlvo?.forEach((socketId) => {
@@ -269,7 +262,7 @@ io.on('connection', (socket) => {
         sairDoCanalVoz(socketAlvo);
       }
     });
-  });
+  }));
 
   socket.on('tela-parada', () => {
     if (socket.canalVozAtual) {
@@ -279,13 +272,12 @@ io.on('connection', (socket) => {
 
   // --- Mensagens diretas (fora de servidores) ---
 
-  socket.on('enviar-dm', ({ paraUsuarioId, conteudo }) => {
+  socket.on('enviar-dm', asyncSocket(async ({ paraUsuarioId, conteudo }) => {
     if (!conteudo || !conteudo.trim()) return;
-    if (!compartilhamServidor(socket.usuario.id, paraUsuarioId)) return;
+    if (!(await compartilhamServidor(socket.usuario.id, paraUsuarioId))) return;
 
-    const resultado = db
-      .prepare('INSERT INTO mensagens_diretas (remetente_id, destinatario_id, conteudo) VALUES (?, ?, ?)')
-      .run(socket.usuario.id, paraUsuarioId, conteudo.trim());
+    const resultado = await get('INSERT INTO mensagens_diretas (remetente_id, destinatario_id, conteudo) VALUES (?, ?, ?) RETURNING id',
+      socket.usuario.id, paraUsuarioId, conteudo.trim());
 
     const mensagem = {
       id: resultado.lastInsertRowid,
@@ -302,7 +294,7 @@ io.on('connection', (socket) => {
         io.to(socketId).emit('nova-dm', { comUsuarioId: paraUsuarioId, deUsuarioId: socket.usuario.id, mensagem });
       });
     });
-  });
+  }));
 
   // Simples retransmissão de sinalização — o servidor não entende o
   // conteúdo, só entrega pro destinatário certo (relay).
@@ -323,7 +315,7 @@ io.on('connection', (socket) => {
     sockets?.delete(socket.id);
     if (sockets && sockets.size === 0) {
       socketsPorUsuario.delete(socket.usuario.id);
-      avisarAmigos(socket.usuario.id, 'amigo-offline');
+    void avisarAmigos(socket.usuario.id, 'amigo-offline');
     }
 
     console.log('Cliente desconectado:', socket.usuario.nome);
@@ -339,6 +331,11 @@ app.use((erro, _req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Servidor rodando em http://localhost:${PORT}`);
-});
+initDb()
+  .then(() => server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Servidor rodando em http://localhost:${PORT}`);
+  }))
+  .catch((error) => {
+    console.error('Nao foi possivel iniciar o Postgres:', error);
+    process.exitCode = 1;
+  });

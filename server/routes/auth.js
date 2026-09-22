@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { db } = require('../db');
+const { get, run } = require('../db');
 const autenticar = require('../middleware/autenticar');
 
 const router = express.Router();
@@ -25,7 +25,8 @@ function dadosPublicos(usuario) {
   };
 }
 
-router.post('/cadastro', async (req, res) => {
+router.post('/cadastro', async (req, res, next) => {
+ try {
   const { nome, email, senha } = req.body;
 
   if (
@@ -42,30 +43,30 @@ router.post('/cadastro', async (req, res) => {
     return res.status(400).json({ erro: 'A senha precisa ter pelo menos 6 caracteres.' });
   }
 
-  const jaExiste = db.prepare('SELECT id FROM usuarios WHERE email = ?').get(email);
+  const jaExiste = await get('SELECT id FROM usuarios WHERE email = ?', email);
   if (jaExiste) {
     return res.status(409).json({ erro: 'Já existe uma conta com este email.' });
   }
 
   const senhaHash = await bcrypt.hash(senha, 10);
-  const resultado = db
-    .prepare('INSERT INTO usuarios (nome, email, senha_hash) VALUES (?, ?, ?)')
-    .run(nome, email, senhaHash);
+  const resultado = await run('INSERT INTO usuarios (nome, email, senha_hash) VALUES (?, ?, ?) RETURNING id', nome, email, senhaHash);
 
   const usuario = { id: resultado.lastInsertRowid, nome, email, avatar_cor: '#5865f2', status: 'Disponível' };
   const token = gerarToken(usuario);
 
   res.status(201).json({ token, usuario: dadosPublicos(usuario) });
+ } catch (error) { next(error); }
 });
 
-router.post('/login', async (req, res) => {
+router.post('/login', async (req, res, next) => {
+ try {
   const { email, senha } = req.body;
 
   if (typeof email !== 'string' || typeof senha !== 'string' || !email.trim() || !senha) {
     return res.status(400).json({ erro: 'Preencha email e senha.' });
   }
 
-  const usuario = db.prepare('SELECT * FROM usuarios WHERE email = ?').get(email);
+  const usuario = await get('SELECT * FROM usuarios WHERE email = ?', email);
   if (!usuario) {
     return res.status(401).json({ erro: 'Email ou senha incorretos.' });
   }
@@ -77,14 +78,18 @@ router.post('/login', async (req, res) => {
 
   const token = gerarToken(usuario);
   res.json({ token, usuario: dadosPublicos(usuario) });
+ } catch (error) { next(error); }
 });
 
-router.get('/perfil', autenticar, (req, res) => {
-  const usuario = db.prepare('SELECT id, nome, email, avatar_cor, avatar_url, banner_url, status FROM usuarios WHERE id = ?').get(req.usuario.id);
+router.get('/perfil', autenticar, async (req, res, next) => {
+ try {
+  const usuario = await get('SELECT id, nome, email, avatar_cor, avatar_url, banner_url, status FROM usuarios WHERE id = ?', req.usuario.id);
   res.json(dadosPublicos(usuario));
+ } catch (error) { next(error); }
 });
 
-router.patch('/perfil', autenticar, (req, res) => {
+router.patch('/perfil', autenticar, async (req, res, next) => {
+ try {
   const nome = String(req.body.nome || '').trim();
   const status = String(req.body.status || '').trim();
   const avatarCor = String(req.body.avatar_cor || '').trim();
@@ -116,12 +121,12 @@ router.patch('/perfil', autenticar, (req, res) => {
     return res.status(400).json({ erro: 'Banner deve ser uma imagem válida de até ~1,5MB.' });
   }
 
-  db.prepare('UPDATE usuarios SET nome = ?, status = ?, avatar_cor = ?, avatar_url = ?, banner_url = ? WHERE id = ?')
-    .run(nome, status || 'Disponível', avatarCor, avatarUrl, bannerUrl, req.usuario.id);
+  await run('UPDATE usuarios SET nome = ?, status = ?, avatar_cor = ?, avatar_url = ?, banner_url = ? WHERE id = ?', nome, status || 'Disponível', avatarCor, avatarUrl, bannerUrl, req.usuario.id);
 
-  const usuario = db.prepare('SELECT id, nome, email, avatar_cor, avatar_url, banner_url, status FROM usuarios WHERE id = ?').get(req.usuario.id);
+  const usuario = await get('SELECT id, nome, email, avatar_cor, avatar_url, banner_url, status FROM usuarios WHERE id = ?', req.usuario.id);
   const token = gerarToken(usuario);
   res.json({ token, usuario: dadosPublicos(usuario) });
+ } catch (error) { next(error); }
 });
 
 module.exports = router;

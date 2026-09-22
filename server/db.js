@@ -1,189 +1,126 @@
-const { DatabaseSync } = require('node:sqlite');
-const path = require('path');
-const fs = require('fs');
 const crypto = require('crypto');
+const { Pool, types } = require('pg');
 
-// O banco fica salvo como um arquivo local (app-gamers.db).
-// node:sqlite é embutido no próprio Node (a partir da v22.5), então
-// não precisa instalar nada nem compilar binário nativo.
-// Quando o projeto migrar para MySQL, só este arquivo precisa mudar —
-// o resto do código (rotas) não depende de qual banco está por trás.
-const databasePath = process.env.DATABASE_PATH || path.join(__dirname, 'app-gamers.db');
-fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-// Snapshot privado de migracao: restaura somente quando nao existe banco local.
-const seedCount = Number(process.env.DATABASE_SEED_PARTS || 0);
-const databaseSeed = Array.from({ length: seedCount }, (_, i) => {
-  const part = process.env[`DATABASE_SEED_PART_${i}`];
-  if (!part) throw new Error('Parte do snapshot SQLite ausente');
-  return part;
-}).join('');
-if (!fs.existsSync(databasePath) && databaseSeed) {
-  const { gunzipSync } = require('zlib');
-  const snapshot = gunzipSync(Buffer.from(databaseSeed, 'base64'));
-  if (snapshot.subarray(0, 16).toString() !== 'SQLite format 3\0') {
-    throw new Error('Snapshot SQLite invalido');
-  }
-  fs.writeFileSync(databasePath, snapshot, { flag: 'wx', mode: 0o600 });
-  console.log('Snapshot SQLite restaurado.');
-}
-const db = new DatabaseSync(databasePath);
+if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL e obrigatoria para iniciar o servidor.');
 
-db.exec('PRAGMA foreign_keys = ON;');
+types.setTypeParser(20, Number);
+const db = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: Number(process.env.PG_POOL_MAX) || 5,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 10_000,
+});
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS usuarios (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    nome TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
-    senha_hash TEXT NOT NULL,
-    criado_em TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS servidores (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    nome TEXT NOT NULL,
-    dono_id INTEGER NOT NULL,
-    codigo_convite TEXT NOT NULL UNIQUE,
-    icone_url TEXT,
-    banner_url TEXT,
-    descricao TEXT,
-    criado_em TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (dono_id) REFERENCES usuarios(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS membros_servidor (
-    servidor_id INTEGER NOT NULL,
-    usuario_id INTEGER NOT NULL,
-    papel TEXT NOT NULL DEFAULT 'membro',
-    entrou_em TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (servidor_id, usuario_id),
-    FOREIGN KEY (servidor_id) REFERENCES servidores(id),
-    FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS canais (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    servidor_id INTEGER NOT NULL,
-    nome TEXT NOT NULL,
-    tipo TEXT NOT NULL CHECK (tipo IN ('texto', 'voz')),
-    criado_em TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (servidor_id) REFERENCES servidores(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS mensagens (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    canal_id INTEGER NOT NULL,
-    usuario_id INTEGER NOT NULL,
-    conteudo TEXT NOT NULL,
-    anexo_nome TEXT,
-    anexo_tipo TEXT,
-    anexo_url TEXT,
-    anexo_tamanho INTEGER,
-    criado_em TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (canal_id) REFERENCES canais(id),
-    FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS cargos (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    servidor_id INTEGER NOT NULL,
-    nome TEXT NOT NULL,
-    cor TEXT NOT NULL DEFAULT '#99aab5',
-    permissoes TEXT NOT NULL DEFAULT '{}',
-    posicao INTEGER NOT NULL DEFAULT 0,
-    criado_em TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (servidor_id) REFERENCES servidores(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS membros_cargos (
-    cargo_id INTEGER NOT NULL,
-    servidor_id INTEGER NOT NULL,
-    usuario_id INTEGER NOT NULL,
-    PRIMARY KEY (cargo_id, usuario_id),
-    FOREIGN KEY (cargo_id) REFERENCES cargos(id),
-    FOREIGN KEY (servidor_id) REFERENCES servidores(id),
-    FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS banimentos_servidor (
-    servidor_id INTEGER NOT NULL,
-    usuario_id INTEGER NOT NULL,
-    criado_em TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (servidor_id, usuario_id),
-    FOREIGN KEY (servidor_id) REFERENCES servidores(id),
-    FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS mensagens_diretas (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    remetente_id INTEGER NOT NULL,
-    destinatario_id INTEGER NOT NULL,
-    conteudo TEXT NOT NULL,
-    criado_em TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (remetente_id) REFERENCES usuarios(id),
-    FOREIGN KEY (destinatario_id) REFERENCES usuarios(id)
-  );
-`);
-
-try {
-  db.exec("ALTER TABLE usuarios ADD COLUMN avatar_cor TEXT NOT NULL DEFAULT '#5865f2'");
-} catch (err) {
-  if (!err.message.includes('duplicate column name')) throw err;
+function sql(text) {
+  let index = 0;
+  return text.replace(/\?/g, () => `$${++index}`);
 }
 
-try {
-  db.exec("ALTER TABLE usuarios ADD COLUMN status TEXT NOT NULL DEFAULT 'Disponível'");
-} catch (err) {
-  if (!err.message.includes('duplicate column name')) throw err;
+const query = async (text, params = []) => db.query(sql(text), params);
+const all = async (text, ...params) => (await query(text, params)).rows;
+const get = async (text, ...params) => (await query(text, params)).rows[0];
+const run = async (text, ...params) => {
+  const result = await query(text, params);
+  const returnedId = result.rows[0]?.id;
+  return { changes: result.rowCount, lastInsertRowid: returnedId == null ? undefined : Number(returnedId) };
+};
+
+async function initDb() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS usuarios (
+      id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      nome TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      senha_hash TEXT NOT NULL,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      avatar_cor TEXT NOT NULL DEFAULT '#5865f2',
+      status TEXT NOT NULL DEFAULT 'Disponível',
+      avatar_url TEXT,
+      banner_url TEXT
+    );
+    CREATE TABLE IF NOT EXISTS servidores (
+      id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      nome TEXT NOT NULL,
+      dono_id BIGINT NOT NULL REFERENCES usuarios(id),
+      codigo_convite TEXT NOT NULL UNIQUE,
+      icone_url TEXT,
+      banner_url TEXT,
+      descricao TEXT,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS membros_servidor (
+      servidor_id BIGINT NOT NULL REFERENCES servidores(id) ON DELETE CASCADE,
+      usuario_id BIGINT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+      papel TEXT NOT NULL DEFAULT 'membro',
+      entrou_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (servidor_id, usuario_id)
+    );
+    CREATE TABLE IF NOT EXISTS canais (
+      id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      servidor_id BIGINT NOT NULL REFERENCES servidores(id) ON DELETE CASCADE,
+      nome TEXT NOT NULL,
+      tipo TEXT NOT NULL CHECK (tipo IN ('texto', 'voz')),
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS mensagens (
+      id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      canal_id BIGINT NOT NULL REFERENCES canais(id) ON DELETE CASCADE,
+      usuario_id BIGINT NOT NULL REFERENCES usuarios(id),
+      conteudo TEXT NOT NULL,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      anexo_nome TEXT,
+      anexo_tipo TEXT,
+      anexo_url TEXT,
+      anexo_tamanho BIGINT
+    );
+    CREATE TABLE IF NOT EXISTS cargos (
+      id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      servidor_id BIGINT NOT NULL REFERENCES servidores(id) ON DELETE CASCADE,
+      nome TEXT NOT NULL,
+      cor TEXT NOT NULL DEFAULT '#99aab5',
+      permissoes JSONB NOT NULL DEFAULT '{}'::jsonb,
+      posicao INTEGER NOT NULL DEFAULT 0,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS membros_cargos (
+      cargo_id BIGINT NOT NULL REFERENCES cargos(id) ON DELETE CASCADE,
+      servidor_id BIGINT NOT NULL REFERENCES servidores(id) ON DELETE CASCADE,
+      usuario_id BIGINT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+      PRIMARY KEY (cargo_id, usuario_id)
+    );
+    CREATE TABLE IF NOT EXISTS banimentos_servidor (
+      servidor_id BIGINT NOT NULL REFERENCES servidores(id) ON DELETE CASCADE,
+      usuario_id BIGINT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (servidor_id, usuario_id)
+    );
+    CREATE TABLE IF NOT EXISTS mensagens_diretas (
+      id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      remetente_id BIGINT NOT NULL REFERENCES usuarios(id),
+      destinatario_id BIGINT NOT NULL REFERENCES usuarios(id),
+      conteudo TEXT NOT NULL,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS mensagens_canal_id_idx ON mensagens(canal_id, id);
+    CREATE INDEX IF NOT EXISTS membros_servidor_usuario_id_idx ON membros_servidor(usuario_id);
+  `);
+  await db.query(`
+    INSERT INTO cargos (servidor_id, nome, cor, permissoes, posicao)
+    SELECT s.id, 'Administrador', '#e74c3c',
+      '{"gerenciar_servidor":true,"gerenciar_canais":true,"gerenciar_cargos":true,"gerenciar_membros":true,"banir_membros":true,"expulsar_call":true,"gerenciar_mensagens":true}'::jsonb,
+      100
+    FROM servidores s
+    WHERE NOT EXISTS (SELECT 1 FROM cargos c WHERE c.servidor_id = s.id AND c.nome = 'Administrador');
+    INSERT INTO membros_cargos (cargo_id, servidor_id, usuario_id)
+    SELECT c.id, s.id, s.dono_id
+    FROM cargos c JOIN servidores s ON s.id = c.servidor_id
+    WHERE c.nome = 'Administrador'
+    ON CONFLICT (cargo_id, usuario_id) DO NOTHING;
+  `);
 }
-
-try {
-  db.exec("ALTER TABLE usuarios ADD COLUMN avatar_url TEXT");
-} catch (err) {
-  if (!err.message.includes('duplicate column name')) throw err;
-}
-
-try {
-  db.exec('ALTER TABLE usuarios ADD COLUMN banner_url TEXT');
-} catch (err) {
-  if (!err.message.includes('duplicate column name')) throw err;
-}
-
-for (const [tabela, coluna, tipo] of [
-  ['servidores', 'icone_url', 'TEXT'],
-  ['servidores', 'banner_url', 'TEXT'],
-  ['servidores', 'descricao', 'TEXT'],
-  ['mensagens', 'anexo_nome', 'TEXT'],
-  ['mensagens', 'anexo_tipo', 'TEXT'],
-  ['mensagens', 'anexo_url', 'TEXT'],
-  ['mensagens', 'anexo_tamanho', 'INTEGER'],
-]) {
-  try {
-    db.exec(`ALTER TABLE ${tabela} ADD COLUMN ${coluna} ${tipo}`);
-  } catch (err) {
-    if (!err.message.includes('duplicate column name')) throw err;
-  }
-}
-
-db.exec(`
-  INSERT INTO cargos (servidor_id, nome, cor, permissoes, posicao)
-  SELECT s.id, 'Administrador', '#e74c3c',
-    '{"gerenciar_servidor":true,"gerenciar_canais":true,"gerenciar_cargos":true,"gerenciar_membros":true,"banir_membros":true,"expulsar_call":true,"gerenciar_mensagens":true}',
-    100
-  FROM servidores s
-  WHERE NOT EXISTS (
-    SELECT 1 FROM cargos c WHERE c.servidor_id = s.id AND c.nome = 'Administrador'
-  );
-
-  INSERT OR IGNORE INTO membros_cargos (cargo_id, servidor_id, usuario_id)
-  SELECT c.id, s.id, s.dono_id
-  FROM cargos c
-  JOIN servidores s ON s.id = c.servidor_id
-  WHERE c.nome = 'Administrador';
-`);
 
 function gerarCodigoConvite() {
   return crypto.randomBytes(4).toString('hex');
 }
 
-module.exports = { db, gerarCodigoConvite };
+module.exports = { db, all, get, run, query, initDb, gerarCodigoConvite };
