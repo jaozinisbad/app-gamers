@@ -1,0 +1,18 @@
+# Configuracao gratuita para testes: SQLite e temporario neste plano.
+# Para preservar dados, revise docs/render.md antes de publicar.
+services:
+  - type: web
+    name: app-gamers-server
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true

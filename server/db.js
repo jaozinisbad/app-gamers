@@ -1,5 +1,6 @@
 const { DatabaseSync } = require('node:sqlite');
 const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
 
 // O banco fica salvo como um arquivo local (app-gamers.db).
@@ -7,7 +8,9 @@ const crypto = require('crypto');
 // não precisa instalar nada nem compilar binário nativo.
 // Quando o projeto migrar para MySQL, só este arquivo precisa mudar —
 // o resto do código (rotas) não depende de qual banco está por trás.
-const db = new DatabaseSync(path.join(__dirname, 'app-gamers.db'));
+const databasePath = process.env.DATABASE_PATH || path.join(__dirname, 'app-gamers.db');
+fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+const db = new DatabaseSync(databasePath);
 
 db.exec('PRAGMA foreign_keys = ON;');
 
