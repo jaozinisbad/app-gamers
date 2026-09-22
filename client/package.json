@@ -1,6 +1,10 @@
 {
   "name": "app-gamers-client",
+<<<<<<< HEAD
   "version": "1.2.2",
+=======
+  "version": "1.1.8",
+>>>>>>> 9cfcac3bd742dc24bebd676096585cab7fb4d17c
   "private": true,
   "main": "electron/main.js",
   "scripts": {

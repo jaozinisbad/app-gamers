@@ -96,6 +96,7 @@ export default function ScreenShareSourcePicker({ onSelecionar, onFechar }) {
               </label>
             )}
 
+<<<<<<< HEAD
             {fontes.find((f) => f.id === selecionada)?.tipo === 'tela' && (
               <label className="screen-picker-audio-app">
                 <input
@@ -108,6 +109,8 @@ export default function ScreenShareSourcePicker({ onSelecionar, onFechar }) {
               </label>
             )}
 
+=======
+>>>>>>> 9cfcac3bd742dc24bebd676096585cab7fb4d17c
             <div className="screen-picker-options">
               <label>
                 FPS:
